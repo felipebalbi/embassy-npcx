@@ -1,0 +1,15 @@
+[package]
+name = "embassy-npcx"
+version = "0.1.0"
+authors = [ "David Venhoek <david@tweedegolf.com>" ]
+edition = "2021"
+license = "MIT"
+description = "Embassy HAL for Nuvoton NPCX MCU family"
+readme = "README.md"
+keywords = [ "embedded", "async", "npcx490m", "nuvoton", "embedded-hal" ]
+categories = [ "embedded", "hardware-support", "no-std", "asynchronous" ]
+repository = "https://github.com/pop-project/embassy-npcx"
+rust-version = "1.80.0"
+
+[dependencies]
+npcx490m-pac = { git = "https://github.com/pop-project/npcx490m-pac", features = ["rt", "critical-section"] }
