@@ -1,3 +1,5 @@
+use core::marker::PhantomData;
+
 use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -24,6 +26,33 @@ impl From<bool> for Level {
     }
 }
 
+fn gpio_block(port: u8) -> &'static crate::pac::gpio0::RegisterBlock {
+    let ptr = match port {
+        0 => crate::pac::Gpio0::ptr(),
+        1 => crate::pac::Gpio1::ptr(),
+        2 => crate::pac::Gpio2::ptr(),
+        3 => crate::pac::Gpio3::ptr(),
+        4 => crate::pac::Gpio4::ptr(),
+        5 => crate::pac::Gpio5::ptr(),
+        6 => crate::pac::Gpio6::ptr(),
+        7 => crate::pac::Gpio7::ptr(),
+        8 => crate::pac::Gpio8::ptr(),
+        9 => crate::pac::Gpio9::ptr(),
+        10 => crate::pac::Gpioa::ptr(),
+        11 => crate::pac::Gpiob::ptr(),
+        12 => crate::pac::Gpioc::ptr(),
+        13 => crate::pac::Gpiod::ptr(),
+        14 => crate::pac::Gpioe::ptr(),
+        15 => crate::pac::Gpiof::ptr(),
+        _ => unreachable!(),
+    };
+
+    // Safety:
+    // the pac ptr functions return pointers to memory that is used for registers for the 'static lifetime
+    // and the created reference is shared.
+    unsafe { &*ptr }
+}
+
 mod sealed {
     pub trait SealedPin: Sized {
         fn pin_port(&self) -> u8;
@@ -34,28 +63,6 @@ mod sealed {
 
         fn pin(&self) -> u8 {
             self.pin_port() % 8
-        }
-
-        fn block(&self) -> *const crate::pac::gpio0::RegisterBlock {
-            match self.port() {
-                0 => crate::pac::Gpio0::ptr(),
-                1 => crate::pac::Gpio1::ptr(),
-                2 => crate::pac::Gpio2::ptr(),
-                3 => crate::pac::Gpio3::ptr(),
-                4 => crate::pac::Gpio4::ptr(),
-                5 => crate::pac::Gpio5::ptr(),
-                6 => crate::pac::Gpio6::ptr(),
-                7 => crate::pac::Gpio7::ptr(),
-                8 => crate::pac::Gpio8::ptr(),
-                9 => crate::pac::Gpio9::ptr(),
-                10 => crate::pac::Gpioa::ptr(),
-                11 => crate::pac::Gpiob::ptr(),
-                12 => crate::pac::Gpioc::ptr(),
-                13 => crate::pac::Gpiod::ptr(),
-                14 => crate::pac::Gpioe::ptr(),
-                15 => crate::pac::Gpiof::ptr(),
-                _ => unreachable!(),
-            }
         }
 
         // Not ideal to mark this unsafe, but PeripheralRef is missing DerefMut...
@@ -70,12 +77,50 @@ mod sealed {
     pub trait SealedLowVoltagePin {}
 }
 
-pub struct OpenDrainOutput<'d, T> {
-    pin: PeripheralRef<'d, T>,
+struct AnyPin {
+    pin_port: u8,
 }
 
-impl<'d, T: Pin> OpenDrainOutput<'d, T> {
-    pub fn new(pin: impl Peripheral<P = T> + 'd, level: Level) -> Self {
+impl AnyPin {
+    fn port(&self) -> u8 {
+        self.pin_port / 8
+    }
+
+    fn pin(&self) -> u8 {
+        self.pin_port % 8
+    }
+}
+
+impl<T: Pin> From<T> for AnyPin {
+    fn from(pin: T) -> Self {
+        AnyPin {
+            pin_port: pin.pin_port(),
+        }
+    }
+}
+
+// Allow use of PeripheralRef to do lifetime management
+impl Peripheral for AnyPin {
+    type P = AnyPin;
+
+    unsafe fn clone_unchecked(&self) -> Self::P {
+        AnyPin {
+            pin_port: self.pin_port,
+        }
+    }
+}
+
+pub struct OutputOnly {}
+
+pub struct InputCapable {}
+
+pub struct OpenDrainOutput<'d, T> {
+    pin: PeripheralRef<'d, AnyPin>,
+    _phantom: PhantomData<T>,
+}
+
+impl<'d> OpenDrainOutput<'d, OutputOnly> {
+    pub fn new(pin: impl Peripheral<P = impl Pin + 'd> + 'd, level: Level) -> Self {
         into_ref!(pin);
 
         critical_section::with(|cs| {
@@ -83,9 +128,7 @@ impl<'d, T: Pin> OpenDrainOutput<'d, T> {
             // We have a mutable reference to the pin through PeripheralRef
             unsafe { pin.set_pin_function(cs) };
 
-            // Safety:
-            // we are within a critical section, and the only one having a mutable reference to the pin peripheral
-            let regs = unsafe { &*pin.block() };
+            let regs = gpio_block(pin.port());
 
             // Set data and output direction
             regs.px_dout().modify(|_, w| w.pin(pin.pin()).bit(level.into()));
@@ -93,14 +136,48 @@ impl<'d, T: Pin> OpenDrainOutput<'d, T> {
             regs.px_dir().modify(|_, w| w.pin(pin.pin()).output());
         });
 
-        OpenDrainOutput { pin }
+        OpenDrainOutput {
+            pin: pin.map_into(),
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<'d> OpenDrainOutput<'d, InputCapable> {
+    pub fn new(pin: impl Peripheral<P = impl InputPin + 'd> + 'd, level: Level) -> Self {
+        into_ref!(pin);
+
+        critical_section::with(|cs| {
+            // Safety:
+            // We have a mutable reference to the pin through PeripheralRef
+            unsafe { pin.set_pin_function(cs) };
+
+            let regs = gpio_block(pin.port());
+
+            // Set data and output direction
+            regs.px_dout().modify(|_, w| w.pin(pin.pin()).bit(level.into()));
+            regs.px_otype().modify(|_, w| w.pin(pin.pin()).opendrain());
+            regs.px_dir().modify(|_, w| w.pin(pin.pin()).output());
+        });
+
+        OpenDrainOutput {
+            pin: pin.map_into(),
+            _phantom: PhantomData,
+        }
     }
 
+    pub fn degrade(self) -> OpenDrainOutput<'d, OutputOnly> {
+        OpenDrainOutput {
+            pin: self.pin,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<T> OpenDrainOutput<'_, T> {
     pub fn set_low(&mut self) {
         critical_section::with(|_| {
-            // Safety:
-            // we are within a critical section, and the only one having a mutable reference to the pin peripheral
-            let regs = unsafe { &*self.pin.block() };
+            let regs = gpio_block(self.pin.port());
 
             // Set data
             regs.px_dout().modify(|_, w| w.pin(self.pin.pin()).clear_bit());
@@ -109,9 +186,7 @@ impl<'d, T: Pin> OpenDrainOutput<'d, T> {
 
     pub fn set_high(&mut self) {
         critical_section::with(|_| {
-            // Safety:
-            // we are within a critical section, and the only one having a mutable reference to the pin peripheral
-            let regs = unsafe { &*self.pin.block() };
+            let regs = gpio_block(self.pin.port());
 
             // Set data
             regs.px_dout().modify(|_, w| w.pin(self.pin.pin()).set_bit());
@@ -120,9 +195,7 @@ impl<'d, T: Pin> OpenDrainOutput<'d, T> {
 
     pub fn set_value(&mut self, value: Level) {
         critical_section::with(|_| {
-            // Safety:
-            // we are within a critical section, and the only one having a mutable reference to the pin peripheral
-            let regs = unsafe { &*self.pin.block() };
+            let regs = gpio_block(self.pin.port());
 
             // Set data
             regs.px_dout().modify(|_, w| w.pin(self.pin.pin()).bit(value.into()));
@@ -132,9 +205,7 @@ impl<'d, T: Pin> OpenDrainOutput<'d, T> {
     #[must_use]
     pub fn is_set_low(&mut self) -> bool {
         critical_section::with(|_| {
-            // Safety:
-            // we are within a critical section, and the only one having a mutable reference to the pin peripheral
-            let regs = unsafe { &*self.pin.block() };
+            let regs = gpio_block(self.pin.port());
 
             regs.px_dout().read().pin(self.pin.pin()).is_low()
         })
@@ -143,9 +214,7 @@ impl<'d, T: Pin> OpenDrainOutput<'d, T> {
     #[must_use]
     pub fn is_set_high(&mut self) -> bool {
         critical_section::with(|_| {
-            // Safety:
-            // we are within a critical section, and the only one having a mutable reference to the pin peripheral
-            let regs = unsafe { &*self.pin.block() };
+            let regs = gpio_block(self.pin.port());
 
             regs.px_dout().read().pin(self.pin.pin()).is_high()
         })
@@ -153,9 +222,7 @@ impl<'d, T: Pin> OpenDrainOutput<'d, T> {
 
     pub fn toggle(&mut self) {
         critical_section::with(|_| {
-            // Safety:
-            // we are within a critical section, and the only one having a mutable reference to the pin peripheral
-            let regs = unsafe { &*self.pin.block() };
+            let regs = gpio_block(self.pin.port());
 
             regs.px_dout()
                 .modify(|r, w| w.pin(self.pin.pin()).bit(r.pin(self.pin.pin()).is_low()));
@@ -163,12 +230,10 @@ impl<'d, T: Pin> OpenDrainOutput<'d, T> {
     }
 }
 
-impl<T: InputPin> OpenDrainOutput<'_, T> {
+impl OpenDrainOutput<'_, InputCapable> {
     pub fn disable_pull(&mut self) {
         critical_section::with(|_| {
-            // Safety:
-            // we are within a critical section, and the only one having a mutable reference to the pin peripheral
-            let regs = unsafe { &*self.pin.block() };
+            let regs = gpio_block(self.pin.port());
 
             regs.px_pull().modify(|_, w| w.pin(self.pin.pin()).disabled());
         });
@@ -176,9 +241,7 @@ impl<T: InputPin> OpenDrainOutput<'_, T> {
 
     pub fn enable_pullup(&mut self) {
         critical_section::with(|_| {
-            // Safety:
-            // we are within a critical section, and the only one having a mutable reference to the pin peripheral
-            let regs = unsafe { &*self.pin.block() };
+            let regs = gpio_block(self.pin.port());
 
             regs.px_pud().modify(|_, w| w.pin(self.pin.pin()).pull_up());
             regs.px_pull().modify(|_, w| w.pin(self.pin.pin()).enabled());
@@ -187,9 +250,7 @@ impl<T: InputPin> OpenDrainOutput<'_, T> {
 
     pub fn enable_pulldown(&mut self) {
         critical_section::with(|_| {
-            // Safety:
-            // we are within a critical section, and the only one having a mutable reference to the pin peripheral
-            let regs = unsafe { &*self.pin.block() };
+            let regs = gpio_block(self.pin.port());
 
             regs.px_pud().modify(|_, w| w.pin(self.pin.pin()).pull_down());
             regs.px_pull().modify(|_, w| w.pin(self.pin.pin()).enabled());
@@ -198,9 +259,7 @@ impl<T: InputPin> OpenDrainOutput<'_, T> {
 
     pub fn is_low(&self) -> bool {
         critical_section::with(|_| {
-            // Safety:
-            // we are within a critical section, and the only one having a mutable reference to the pin peripheral
-            let regs = unsafe { &*self.pin.block() };
+            let regs = gpio_block(self.pin.port());
 
             regs.px_din().read().pin(self.pin.pin()).is_low()
         })
@@ -208,21 +267,19 @@ impl<T: InputPin> OpenDrainOutput<'_, T> {
 
     pub fn is_high(&self) -> bool {
         critical_section::with(|_| {
-            // Safety:
-            // we are within a critical section, and the only one having a mutable reference to the pin peripheral
-            let regs = unsafe { &*self.pin.block() };
+            let regs = gpio_block(self.pin.port());
 
             regs.px_din().read().pin(self.pin.pin()).is_low()
         })
     }
 }
 
-pub struct PushPullOutput<'d, T> {
-    pin: PeripheralRef<'d, T>,
+pub struct PushPullOutput<'d> {
+    pin: PeripheralRef<'d, AnyPin>,
 }
 
-impl<'d, T: Peripheral + Pin> PushPullOutput<'d, T> {
-    pub fn new(pin: impl Peripheral<P = T> + 'd, level: Level) -> Self {
+impl<'d> PushPullOutput<'d> {
+    pub fn new(pin: impl Peripheral<P = impl Pin + 'd> + 'd, level: Level) -> Self {
         into_ref!(pin);
 
         critical_section::with(|cs| {
@@ -230,9 +287,7 @@ impl<'d, T: Peripheral + Pin> PushPullOutput<'d, T> {
             // We have a mutable reference to the pin through PeripheralRef
             unsafe { pin.set_pin_function(cs) };
 
-            // Safety:
-            // we are within a critical section, and the only one having a mutable reference to the pin peripheral
-            let regs = unsafe { &*pin.block() };
+            let regs = gpio_block(pin.port());
 
             // Set data and output direction
             regs.px_dout().modify(|_, w| w.pin(pin.pin()).bit(level.into()));
@@ -240,14 +295,12 @@ impl<'d, T: Peripheral + Pin> PushPullOutput<'d, T> {
             regs.px_dir().modify(|_, w| w.pin(pin.pin()).output());
         });
 
-        PushPullOutput { pin }
+        PushPullOutput { pin: pin.map_into() }
     }
 
     pub fn set_low(&mut self) {
         critical_section::with(|_| {
-            // Safety:
-            // we are within a critical section, and the only one having a mutable reference to the pin peripheral
-            let regs = unsafe { &*self.pin.block() };
+            let regs = gpio_block(self.pin.port());
 
             // Set data
             regs.px_dout().modify(|_, w| w.pin(self.pin.pin()).clear_bit());
@@ -256,9 +309,7 @@ impl<'d, T: Peripheral + Pin> PushPullOutput<'d, T> {
 
     pub fn set_high(&mut self) {
         critical_section::with(|_| {
-            // Safety:
-            // we are within a critical section, and the only one having a mutable reference to the pin peripheral
-            let regs = unsafe { &*self.pin.block() };
+            let regs = gpio_block(self.pin.port());
 
             // Set data
             regs.px_dout().modify(|_, w| w.pin(self.pin.pin()).set_bit());
@@ -267,9 +318,7 @@ impl<'d, T: Peripheral + Pin> PushPullOutput<'d, T> {
 
     pub fn set_value(&mut self, value: Level) {
         critical_section::with(|_| {
-            // Safety:
-            // we are within a critical section, and the only one having a mutable reference to the pin peripheral
-            let regs = unsafe { &*self.pin.block() };
+            let regs = gpio_block(self.pin.port());
 
             // Set data
             regs.px_dout().modify(|_, w| w.pin(self.pin.pin()).bit(value.into()));
@@ -279,9 +328,7 @@ impl<'d, T: Peripheral + Pin> PushPullOutput<'d, T> {
     #[must_use]
     pub fn is_set_low(&mut self) -> bool {
         critical_section::with(|_| {
-            // Safety:
-            // we are within a critical section, and the only one having a mutable reference to the pin peripheral
-            let regs = unsafe { &*self.pin.block() };
+            let regs = gpio_block(self.pin.port());
 
             regs.px_dout().read().pin(self.pin.pin()).is_low()
         })
@@ -290,9 +337,7 @@ impl<'d, T: Peripheral + Pin> PushPullOutput<'d, T> {
     #[must_use]
     pub fn is_set_high(&mut self) -> bool {
         critical_section::with(|_| {
-            // Safety:
-            // we are within a critical section, and the only one having a mutable reference to the pin peripheral
-            let regs = unsafe { &*self.pin.block() };
+            let regs = gpio_block(self.pin.port());
 
             regs.px_dout().read().pin(self.pin.pin()).is_high()
         })
@@ -300,9 +345,7 @@ impl<'d, T: Peripheral + Pin> PushPullOutput<'d, T> {
 
     pub fn toggle(&mut self) {
         critical_section::with(|_| {
-            // Safety:
-            // we are within a critical section, and the only one having a mutable reference to the pin peripheral
-            let regs = unsafe { &*self.pin.block() };
+            let regs = gpio_block(self.pin.port());
 
             regs.px_dout()
                 .modify(|r, w| w.pin(self.pin.pin()).bit(r.pin(self.pin.pin()).is_low()));
