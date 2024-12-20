@@ -13,3 +13,5 @@ rust-version = "1.80.0"
 
 [dependencies]
 npcx490m-pac = { git = "https://github.com/pop-project/npcx490m-pac", features = ["rt", "critical-section"] }
+embassy-hal-internal = { git = "https://github.com/embassy-rs/embassy", features = ["cortex-m", "prio-bits-0"] }
+critical-section = "1.1"
