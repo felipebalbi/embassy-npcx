@@ -114,12 +114,12 @@ pub struct OutputOnly {}
 
 pub struct InputCapable {}
 
-pub struct OpenDrainOutput<'d, T> {
+pub struct OutputOpenDrain<'d, T> {
     pin: PeripheralRef<'d, AnyPin>,
     _phantom: PhantomData<T>,
 }
 
-impl<'d> OpenDrainOutput<'d, OutputOnly> {
+impl<'d> OutputOpenDrain<'d, OutputOnly> {
     pub fn new(pin: impl Peripheral<P = impl Pin + 'd> + 'd, level: Level) -> Self {
         into_ref!(pin);
 
@@ -136,14 +136,14 @@ impl<'d> OpenDrainOutput<'d, OutputOnly> {
             regs.px_dir().modify(|_, w| w.pin(pin.pin()).output());
         });
 
-        OpenDrainOutput {
+        OutputOpenDrain {
             pin: pin.map_into(),
             _phantom: PhantomData,
         }
     }
 }
 
-impl<'d> OpenDrainOutput<'d, InputCapable> {
+impl<'d> OutputOpenDrain<'d, InputCapable> {
     pub fn new(pin: impl Peripheral<P = impl InputPin + 'd> + 'd, level: Level) -> Self {
         into_ref!(pin);
 
@@ -160,21 +160,21 @@ impl<'d> OpenDrainOutput<'d, InputCapable> {
             regs.px_dir().modify(|_, w| w.pin(pin.pin()).output());
         });
 
-        OpenDrainOutput {
+        OutputOpenDrain {
             pin: pin.map_into(),
             _phantom: PhantomData,
         }
     }
 
-    pub fn degrade(self) -> OpenDrainOutput<'d, OutputOnly> {
-        OpenDrainOutput {
+    pub fn degrade(self) -> OutputOpenDrain<'d, OutputOnly> {
+        OutputOpenDrain {
             pin: self.pin,
             _phantom: PhantomData,
         }
     }
 }
 
-impl<T> OpenDrainOutput<'_, T> {
+impl<T> OutputOpenDrain<'_, T> {
     pub fn set_low(&mut self) {
         critical_section::with(|_| {
             let regs = gpio_block(self.pin.port());
@@ -230,7 +230,7 @@ impl<T> OpenDrainOutput<'_, T> {
     }
 }
 
-impl OpenDrainOutput<'_, InputCapable> {
+impl OutputOpenDrain<'_, InputCapable> {
     pub fn disable_pull(&mut self) {
         critical_section::with(|_| {
             let regs = gpio_block(self.pin.port());
@@ -269,16 +269,16 @@ impl OpenDrainOutput<'_, InputCapable> {
         critical_section::with(|_| {
             let regs = gpio_block(self.pin.port());
 
-            regs.px_din().read().pin(self.pin.pin()).is_low()
+            regs.px_din().read().pin(self.pin.pin()).is_high()
         })
     }
 }
 
-pub struct PushPullOutput<'d> {
+pub struct Output<'d> {
     pin: PeripheralRef<'d, AnyPin>,
 }
 
-impl<'d> PushPullOutput<'d> {
+impl<'d> Output<'d> {
     pub fn new(pin: impl Peripheral<P = impl Pin + 'd> + 'd, level: Level) -> Self {
         into_ref!(pin);
 
@@ -295,7 +295,7 @@ impl<'d> PushPullOutput<'d> {
             regs.px_dir().modify(|_, w| w.pin(pin.pin()).output());
         });
 
-        PushPullOutput { pin: pin.map_into() }
+        Output { pin: pin.map_into() }
     }
 
     pub fn set_low(&mut self) {
