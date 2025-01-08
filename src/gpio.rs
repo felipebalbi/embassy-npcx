@@ -265,32 +265,6 @@ impl<T> OutputOpenDrain<'_, T> {
 }
 
 impl OutputOpenDrain<'_, InputCapable> {
-    pub fn disable_pull(&mut self) {
-        critical_section::with(|_| {
-            let regs = self.pin.port();
-
-            regs.px_pull().modify(|_, w| w.pin(self.pin.pin()).disabled());
-        });
-    }
-
-    pub fn enable_pullup(&mut self) {
-        critical_section::with(|_| {
-            let regs = self.pin.port();
-
-            regs.px_pud().modify(|_, w| w.pin(self.pin.pin()).pull_up());
-            regs.px_pull().modify(|_, w| w.pin(self.pin.pin()).enabled());
-        });
-    }
-
-    pub fn enable_pulldown(&mut self) {
-        critical_section::with(|_| {
-            let regs = self.pin.port();
-
-            regs.px_pud().modify(|_, w| w.pin(self.pin.pin()).pull_down());
-            regs.px_pull().modify(|_, w| w.pin(self.pin.pin()).enabled());
-        });
-    }
-
     pub fn is_low(&self) -> bool {
         critical_section::with(|_| {
             let regs = self.pin.port();
