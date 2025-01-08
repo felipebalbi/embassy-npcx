@@ -84,6 +84,70 @@ pub struct OutputOnly {}
 
 pub struct InputCapable {}
 
+pub struct Input<'d> {
+    pin: PeripheralRef<'d, AnyPin>,
+}
+
+impl<'d> Input<'d> {
+    pub fn new(pin: impl Peripheral<P = impl InputPin + 'd> + 'd) -> Self {
+        into_ref!(pin);
+
+        critical_section::with(|cs| {
+            // Safety:
+            // We have a mutable reference to the pin through PeripheralRef
+            unsafe { pin.set_pin_function(cs) };
+
+            let regs = pin.port();
+
+            regs.px_dir().modify(|_, w| w.pin(pin.pin()).input());
+        });
+
+        Input { pin: pin.map_into() }
+    }
+
+    pub fn disable_pull(&mut self) {
+        critical_section::with(|_| {
+            let regs = self.pin.port();
+
+            regs.px_pull().modify(|_, w| w.pin(self.pin.pin()).disabled());
+        });
+    }
+
+    pub fn enable_pullup(&mut self) {
+        critical_section::with(|_| {
+            let regs = self.pin.port();
+
+            regs.px_pud().modify(|_, w| w.pin(self.pin.pin()).pull_up());
+            regs.px_pull().modify(|_, w| w.pin(self.pin.pin()).enabled());
+        });
+    }
+
+    pub fn enable_pulldown(&mut self) {
+        critical_section::with(|_| {
+            let regs = self.pin.port();
+
+            regs.px_pud().modify(|_, w| w.pin(self.pin.pin()).pull_down());
+            regs.px_pull().modify(|_, w| w.pin(self.pin.pin()).enabled());
+        });
+    }
+
+    pub fn is_low(&self) -> bool {
+        critical_section::with(|_| {
+            let regs = self.pin.port();
+
+            regs.px_din().read().pin(self.pin.pin()).is_low()
+        })
+    }
+
+    pub fn is_high(&self) -> bool {
+        critical_section::with(|_| {
+            let regs = self.pin.port();
+
+            regs.px_din().read().pin(self.pin.pin()).is_high()
+        })
+    }
+}
+
 pub struct OutputOpenDrain<'d, T> {
     pin: PeripheralRef<'d, AnyPin>,
     _phantom: PhantomData<T>,
