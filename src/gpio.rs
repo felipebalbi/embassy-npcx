@@ -28,8 +28,10 @@ impl From<bool> for Level {
 
 mod sealed {
     pub trait SealedPin {
+        #[must_use]
         fn pin(&self) -> u8;
 
+        #[must_use]
         fn port(&self) -> &'static crate::pac::gpio0::RegisterBlock;
 
         // Not ideal to mark this unsafe, but PeripheralRef is missing DerefMut...
@@ -60,10 +62,12 @@ struct AnyPin {
 }
 
 impl AnyPin {
+    #[must_use]
     fn pin(&self) -> u8 {
         self.pin
     }
 
+    #[must_use]
     fn port(&self) -> &'static crate::pac::gpio0::RegisterBlock {
         self.port
     }
@@ -188,20 +192,16 @@ impl<T> Input<'_, T> {
 
     #[must_use]
     pub fn is_low(&self) -> bool {
-        critical_section::with(|_| {
-            let regs = self.pin.port();
+        let regs = self.pin.port();
 
-            regs.px_din().read().pin(self.pin.pin()).is_low()
-        })
+        regs.px_din().read().pin(self.pin.pin()).is_low()
     }
 
     #[must_use]
     pub fn is_high(&self) -> bool {
-        critical_section::with(|_| {
-            let regs = self.pin.port();
+        let regs = self.pin.port();
 
-            regs.px_din().read().pin(self.pin.pin()).is_high()
-        })
+        regs.px_din().read().pin(self.pin.pin()).is_high()
     }
 }
 
@@ -297,20 +297,16 @@ impl<T> OutputOpenDrain<'_, T> {
 
     #[must_use]
     pub fn is_set_low(&mut self) -> bool {
-        critical_section::with(|_| {
-            let regs = self.pin.port();
+        let regs = self.pin.port();
 
-            regs.px_dout().read().pin(self.pin.pin()).is_low()
-        })
+        regs.px_dout().read().pin(self.pin.pin()).is_low()
     }
 
     #[must_use]
     pub fn is_set_high(&mut self) -> bool {
-        critical_section::with(|_| {
-            let regs = self.pin.port();
+        let regs = self.pin.port();
 
-            regs.px_dout().read().pin(self.pin.pin()).is_high()
-        })
+        regs.px_dout().read().pin(self.pin.pin()).is_high()
     }
 
     pub fn toggle(&mut self) {
@@ -326,20 +322,16 @@ impl<T> OutputOpenDrain<'_, T> {
 impl OutputOpenDrain<'_, InputCapable> {
     #[must_use]
     pub fn is_low(&self) -> bool {
-        critical_section::with(|_| {
-            let regs = self.pin.port();
+        let regs = self.pin.port();
 
-            regs.px_din().read().pin(self.pin.pin()).is_low()
-        })
+        regs.px_din().read().pin(self.pin.pin()).is_low()
     }
 
     #[must_use]
     pub fn is_high(&self) -> bool {
-        critical_section::with(|_| {
-            let regs = self.pin.port();
+        let regs = self.pin.port();
 
-            regs.px_din().read().pin(self.pin.pin()).is_high()
-        })
+        regs.px_din().read().pin(self.pin.pin()).is_high()
     }
 
     pub fn drive_always(&self) {
@@ -475,20 +467,16 @@ impl<T> Output<'_, T> {
 
     #[must_use]
     pub fn is_set_low(&mut self) -> bool {
-        critical_section::with(|_| {
-            let regs = self.pin.port();
+        let regs = self.pin.port();
 
-            regs.px_dout().read().pin(self.pin.pin()).is_low()
-        })
+        regs.px_dout().read().pin(self.pin.pin()).is_low()
     }
 
     #[must_use]
     pub fn is_set_high(&mut self) -> bool {
-        critical_section::with(|_| {
-            let regs = self.pin.port();
+        let regs = self.pin.port();
 
-            regs.px_dout().read().pin(self.pin.pin()).is_high()
-        })
+        regs.px_dout().read().pin(self.pin.pin()).is_high()
     }
 
     pub fn toggle(&mut self) {
