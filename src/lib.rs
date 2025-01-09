@@ -1,6 +1,7 @@
 #![no_std]
 
 pub mod gpio;
+pub mod miwu;
 pub use npcx490m_pac as pac;
 
 embassy_hal_internal::peripherals!(
@@ -11,7 +12,7 @@ embassy_hal_internal::peripherals!(
     PH05, PH06, PH07, PH08, PH09, PH10, PH11, PI01, PI02, PI03, PI04, PI05, PI06, PI07, PI08, PI09, PI10, PI11, PI12,
     PJ01, PJ02, PJ03, PJ04, PJ05, PJ06, PJ07, PJ08, PJ09, PJ10, PJ11, PK01, PK02, PK03, PK04, PK05, PK06, PK07, PK08,
     PK09, PK10, PK11, PK12, PL01, PL02, PL03, PL05, PL06, PL07, PL08, PL09, PL10, PL11, PL12, PM02, PM01, PM04, PM05,
-    PM06, PM07, PM11, PM12,
+    PM06, PM07, PM11, PM12, MIWU1_73
 );
 
 pub fn init() -> Peripherals {
