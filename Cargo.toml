@@ -12,4 +12,4 @@ repository = "https://github.com/pop-project/embassy-npcx"
 rust-version = "1.80.0"
 
 [dependencies]
-npcx490m-pac = { git = "https://github.com/pop-project/npcx490m-pac", features = ["rt", "critical-section"] }
+npcx490m-pac = { git = "https://github.com/pop-project/npcx490m-pac", features = ["rt", "critical-section"], branch = "clocks-fixes" }
