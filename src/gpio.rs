@@ -2,7 +2,8 @@ use core::marker::PhantomData;
 
 use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
 
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Level {
     Low,
     High,
@@ -502,6 +503,92 @@ impl Output<'_, InputCapable> {
             let regs = self.pin.port();
             regs.px_envdd().modify(|_, w| w.pin(self.pin.pin()).enabled());
         })
+    }
+}
+
+impl<T> embedded_hal::digital::ErrorType for Input<'_, T> {
+    type Error = core::convert::Infallible;
+}
+
+impl<T> embedded_hal::digital::InputPin for Input<'_, T> {
+    fn is_high(&mut self) -> Result<bool, Self::Error> {
+        Ok((*self).is_high())
+    }
+
+    fn is_low(&mut self) -> Result<bool, Self::Error> {
+        Ok((*self).is_low())
+    }
+}
+
+impl<T> embedded_hal::digital::ErrorType for Output<'_, T> {
+    type Error = core::convert::Infallible;
+}
+
+impl<T> embedded_hal::digital::OutputPin for Output<'_, T> {
+    fn set_low(&mut self) -> Result<(), Self::Error> {
+        (*self).set_low();
+        Ok(())
+    }
+
+    fn set_high(&mut self) -> Result<(), Self::Error> {
+        (*self).set_high();
+        Ok(())
+    }
+}
+
+impl<T> embedded_hal::digital::StatefulOutputPin for Output<'_, T> {
+    fn is_set_high(&mut self) -> Result<bool, Self::Error> {
+        Ok((*self).is_set_high())
+    }
+
+    fn is_set_low(&mut self) -> Result<bool, Self::Error> {
+        Ok((*self).is_set_low())
+    }
+
+    fn toggle(&mut self) -> Result<(), Self::Error> {
+        (*self).toggle();
+        Ok(())
+    }
+}
+
+impl<T> embedded_hal::digital::ErrorType for OutputOpenDrain<'_, T> {
+    type Error = core::convert::Infallible;
+}
+
+impl<T> embedded_hal::digital::OutputPin for OutputOpenDrain<'_, T> {
+    fn set_low(&mut self) -> Result<(), Self::Error> {
+        (*self).set_low();
+        Ok(())
+    }
+
+    fn set_high(&mut self) -> Result<(), Self::Error> {
+        (*self).set_high();
+        Ok(())
+    }
+}
+
+impl<T> embedded_hal::digital::StatefulOutputPin for OutputOpenDrain<'_, T> {
+    fn is_set_high(&mut self) -> Result<bool, Self::Error> {
+        Ok((*self).is_set_high())
+    }
+
+    fn is_set_low(&mut self) -> Result<bool, Self::Error> {
+        Ok((*self).is_set_low())
+    }
+
+    fn toggle(&mut self) -> Result<(), Self::Error> {
+        (*self).toggle();
+        Ok(())
+    }
+}
+
+impl embedded_hal::digital::InputPin for OutputOpenDrain<'_, InputCapable> {
+    fn is_high(&mut self) -> Result<bool, Self::Error> {
+        Ok((*self).is_high())
+    }
+
+    fn is_low(&mut self) -> Result<bool, Self::Error> {
+        Ok((*self).is_low())
     }
 }
 
