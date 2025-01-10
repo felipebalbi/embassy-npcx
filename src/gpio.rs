@@ -1098,7 +1098,7 @@ impl_input_pin!(PM02, crate::pac::Gpio5::ptr(), 6, |regs| {
     regs.devaltn().modify(|_, w| w.i3c2_sl().clear_bit());
 });
 impl_input_pin!(PL03, crate::pac::Gpio5::ptr(), 7, |regs| {
-    regs.devalt1().modify(|_, w| w.no_lpc_espi().clear_bit());
+    regs.devalt1().modify(|_, w| w.no_lpc_espi().set_bit());
 });
 
 // GPIO6
@@ -1493,6 +1493,10 @@ impl_lowvoltage_pin!(
     |regs| {
         regs.devalt4().modify(|_, w| w.pwm5_sl().clear_bit());
         regs.devaltk().modify(|_, w| w.i2c7_1_sl().clear_bit());
+        // Note: this messes with debug interfaces, maybe there is a better way?
+        unsafe { crate::pac::Dev::steal() }
+            .dbgctrl2()
+            .modify(|_, w| w.ccdev_sel().bits(6));
     },
     |regs, state| {
         regs.lv_gpio_ctla().modify(|_, w| w.gb7_lv().bit(state));

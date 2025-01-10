@@ -15,7 +15,7 @@ rust-version = "1.80.0"
 defmt = ["dep:defmt"]
 
 [dependencies]
-npcx490m-pac = { git = "https://github.com/pop-project/npcx490m-pac", branch="dev/david/sysconfig2", features = ["rt", "critical-section"] }
+npcx490m-pac = { git = "https://github.com/pop-project/npcx490m-pac", features = ["rt", "critical-section"] }
 embassy-hal-internal = { git = "https://github.com/embassy-rs/embassy", features = ["cortex-m", "prio-bits-0"] }
 critical-section = "1.1"
 defmt = { version = "0.3", optional = true }
