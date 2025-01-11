@@ -36,7 +36,7 @@ mod sealed {
         fn group(&self) -> usize;
 
         #[must_use]
-        fn subgroup(&self) -> u8;
+        fn subgroup(&self) -> usize;
 
         #[must_use]
         fn port_n(&self) -> usize;
@@ -54,69 +54,81 @@ pub trait WakeUpInput: sealed::SealedWakeUpInput {
     fn enable(&mut self, mode: Mode) {
         let port = self.port();
 
-        port.wkenn(self.group())
-            .modify(|_, w| w.input(self.subgroup()).disabled());
+        critical_section::with(|_cs| {
+            port.wkenn(self.group())
+                .modify(|_, w| w.input(self.subgroup() as u8).disabled());
 
-        let (wkmod, wkaedgn, wkedgn);
+            let (wkmod, wkaedgn, wkedgn);
 
-        use crate::pac::miwu0::*;
-        match mode {
-            Mode::Level(level) => {
-                wkmod = wkmodn::InputMode::Level;
-                wkaedgn = None;
-                wkedgn = Some(match level {
-                    Level::Low => wkedgn::Edge::LowFalling,
-                    Level::High => wkedgn::Edge::HighRising,
-                });
+            use crate::pac::miwu0::*;
+            match mode {
+                Mode::Level(level) => {
+                    wkmod = wkmodn::InputMode::Level;
+                    wkaedgn = None;
+                    wkedgn = Some(match level {
+                        Level::Low => wkedgn::Edge::LowFalling,
+                        Level::High => wkedgn::Edge::HighRising,
+                    });
+                }
+                Mode::Edge(edge) => {
+                    wkmod = wkmodn::InputMode::Edge;
+                    (wkaedgn, wkedgn) = match edge {
+                        Edge::Any => (Some(wkaedgn::AnyEdge::Any), None),
+                        Edge::Falling => (Some(wkaedgn::AnyEdge::Edge), Some(wkedgn::Edge::LowFalling)),
+                        Edge::Rising => (Some(wkaedgn::AnyEdge::Edge), Some(wkedgn::Edge::HighRising)),
+                    };
+                }
             }
-            Mode::Edge(edge) => {
-                wkmod = wkmodn::InputMode::Edge;
-                (wkaedgn, wkedgn) = match edge {
-                    Edge::Any => (Some(wkaedgn::AnyEdge::Any), None),
-                    Edge::Falling => (Some(wkaedgn::AnyEdge::Any), Some(wkedgn::Edge::LowFalling)),
-                    Edge::Rising => (Some(wkaedgn::AnyEdge::Any), Some(wkedgn::Edge::HighRising)),
-                };
+
+            port.wkmodn(self.group())
+                .modify(|_, w| w.input(self.subgroup() as u8).variant(wkmod));
+
+            if let Some(wkaedgn) = wkaedgn {
+                port.wkaedgn(self.group())
+                    .modify(|_, w| w.input(self.subgroup() as u8).variant(wkaedgn));
             }
-        }
 
-        port.wkmodn(self.group())
-            .modify(|_, w| w.input(self.subgroup()).variant(wkmod));
+            if let Some(wkedgn) = wkedgn {
+                port.wkedgn(self.group())
+                    .modify(|_, w| w.input(self.subgroup() as u8).variant(wkedgn));
+            }
 
-        if let Some(wkaedgn) = wkaedgn {
-            port.wkaedgn(self.group())
-                .modify(|_, w| w.input(self.subgroup()).variant(wkaedgn));
-        }
-
-        if let Some(wkedgn) = wkedgn {
-            port.wkedgn(self.group())
-                .modify(|_, w| w.input(self.subgroup()).variant(wkedgn));
-        }
-
-        port.wkinenn(self.group())
-            .modify(|_, w| w.input(self.subgroup()).enabled());
-        port.wkpcln(self.group()).write(|w| w.input(self.subgroup()).clear());
-        port.wkenn(self.group())
-            .modify(|_, w| w.input(self.subgroup()).enabled());
+            port.wkinenn(self.group())
+                .modify(|_, w| w.input(self.subgroup() as u8).enabled());
+            port.wkpcln(self.group())
+                .write(|w| w.input(self.subgroup() as u8).clear());
+            port.wkenn(self.group())
+                .modify(|_, w| w.input(self.subgroup() as u8).enabled());
+        });
     }
 
     fn disable(&mut self) {
+        critical_section::with(|_cs| {
+            self.port()
+                .wkenn(self.group())
+                .modify(|_, w| w.input(self.subgroup() as u8).disabled());
+        });
+    }
+
+    fn clear_pending(&mut self) {
         self.port()
-            .wkenn(self.group())
-            .modify(|_, w| w.input(self.subgroup()).disabled());
-        self.port()
-            .wkinenn(self.group())
-            .modify(|_, w| w.input(self.subgroup()).disabled());
+            .wkpcln(self.group())
+            .write(|w| w.input(self.subgroup() as u8).clear());
     }
 
     fn is_high(&self) -> bool {
-        self.port().wkstn(self.group()).read().input(self.subgroup()).is_high()
+        self.port()
+            .wkstn(self.group())
+            .read()
+            .input(self.subgroup() as u8)
+            .is_high()
     }
 
     fn is_pending(&self) -> bool {
         self.port()
             .wkpndn(self.group())
             .read()
-            .input(self.subgroup())
+            .input(self.subgroup() as u8)
             .is_pending()
     }
 }
@@ -127,7 +139,7 @@ macro_rules! impl_wake_up_input {
             fn group(&self) -> usize {
                 $group
             }
-            fn subgroup(&self) -> u8 {
+            fn subgroup(&self) -> usize {
                 $subgroup
             }
             fn port_n(&self) -> usize {
@@ -138,11 +150,11 @@ macro_rules! impl_wake_up_input {
             }
         }
         impl WakeUpInput for crate::peripherals::$peripheral {}
+
+        #[cfg(feature = "rt")]
+        impl rt::WakeUpInputWaitable for crate::peripherals::$peripheral {}
     };
 }
-
-// MIWU1 - WUI73 - WKINTG_1
-impl_wake_up_input!(MIWU1_73, 1, 6, 3, WKINTG_1);
 
 #[cfg(feature = "rt")]
 pub mod rt {
@@ -156,22 +168,40 @@ pub mod rt {
 
     // Note: having 196 wakers costs quite a bit of RAM.
     // If desired, change to or add intrusive linked list waker to save RAM.
-    const WUI_COUNT: usize = 64 * MIWU_COUNT;
+    const SUBGROUP_COUNT: usize = 8;
+    const GROUP_COUNT: usize = 8;
+    const WUI_COUNT: usize = MIWU_COUNT * GROUP_COUNT * SUBGROUP_COUNT;
     static MIWU_WAKERS: [AtomicWaker; WUI_COUNT] = [const { AtomicWaker::new() }; WUI_COUNT];
 
+    const fn get_wui_i(miwu_n: usize, group: usize, subgroup: usize) -> usize {
+        miwu_n * SUBGROUP_COUNT * GROUP_COUNT + group * SUBGROUP_COUNT + subgroup
+    }
+
+    fn get_wui(miwu_n: usize, group: usize, subgroup: usize) -> &'static AtomicWaker {
+        &MIWU_WAKERS[get_wui_i(miwu_n, group, subgroup)]
+    }
+
     pub trait WakeUpInputWaitable: WakeUpInput + Sized {
-        async fn wait_for_pending(&mut self) {
-            WakeUpInputFuture::<Self> { channel: &self }.await
+        async fn wait_for_pending(&mut self, mode: Mode) {
+            self.enable(mode);
+            WakeUpInputFuture::<Self> { channel: self }.await
         }
 
         fn waker(&self) -> &'static AtomicWaker {
-            let wui_i = self.port_n() * self.group() * self.subgroup() as usize;
-            &MIWU_WAKERS[wui_i]
+            get_wui(self.port_n(), self.group(), self.subgroup())
         }
     }
 
     struct WakeUpInputFuture<'a, T: WakeUpInputWaitable> {
-        channel: &'a T,
+        channel: &'a mut T,
+    }
+
+    impl<'a, T: WakeUpInputWaitable> Drop for WakeUpInputFuture<'a, T> {
+        fn drop(&mut self) {
+            // Clean up, and do not assume that the interrupt has run.
+            self.channel.disable();
+            self.channel.clear_pending();
+        }
     }
 
     impl<'a, T: WakeUpInputWaitable> Future for WakeUpInputFuture<'a, T> {
@@ -208,12 +238,15 @@ pub mod rt {
         let port = get_miwu(miwu_n);
 
         let pending = port.wkpndn(miwu_group).read();
-        for wui in BitIter(pending.bits()) {
-            let wui_i = miwu_n * miwu_group * (wui as usize);
-            MIWU_WAKERS[wui_i].wake();
+        for subgroup in BitIter(pending.bits()) {
+            let waker = get_wui(miwu_n, miwu_group, subgroup as usize);
+            waker.wake();
         }
 
-        port.wkpcln(miwu_group).write(|w| unsafe { w.bits(pending.bits()) });
+        critical_section::with(|_cs| {
+            port.wkenn(miwu_group)
+                .modify(|r, w| unsafe { w.bits(r.bits() & !pending.bits()) });
+        });
     }
 
     macro_rules! impl_irq {
@@ -251,3 +284,5 @@ pub mod rt {
     impl_irq!(WKINTG_2, 2, 6);
     impl_irq!(WKINTH_2, 2, 7);
 }
+
+impl_wake_up_input!(MIWU1_73, 1, 6, 3, WKINTG_1);
