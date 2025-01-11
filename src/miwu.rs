@@ -1,3 +1,19 @@
+const MIWU_COUNT: usize = 3;
+
+const fn get_miwu(n: usize) -> &'static crate::pac::miwu0::RegisterBlock {
+    const MIWU_N: [*const crate::pac::miwu0::RegisterBlock; MIWU_COUNT] = [
+        crate::pac::Miwu0::ptr(),
+        crate::pac::Miwu1::ptr(),
+        crate::pac::Miwu2::ptr(),
+    ];
+
+    let ptr = MIWU_N[n];
+    // Safety:
+    // the pac ptr functions return pointers to memory that is used for registers for the 'static lifetime
+    // and the created reference is shared.
+    unsafe { &*ptr }
+}
+
 pub enum Level {
     Low,
     High,
@@ -23,10 +39,14 @@ mod sealed {
         fn subgroup(&self) -> u8;
 
         #[must_use]
-        fn port(&self) -> &'static crate::pac::miwu0::RegisterBlock;
+        fn port_n(&self) -> usize;
 
         #[must_use]
         fn interrupt(&self) -> crate::pac::Interrupt;
+
+        fn port(&self) -> &'static crate::pac::miwu0::RegisterBlock {
+            super::get_miwu(self.port_n())
+        }
     }
 }
 
@@ -102,7 +122,7 @@ pub trait WakeUpInput: sealed::SealedWakeUpInput {
 }
 
 macro_rules! impl_wake_up_input {
-    ($peripheral:ident, $port:expr, $group:expr, $subgroup:expr, $interrupt:ident) => {
+    ($peripheral:ident, $miwu_n:literal, $group:literal, $subgroup:literal, $interrupt:ident) => {
         impl sealed::SealedWakeUpInput for crate::peripherals::$peripheral {
             fn group(&self) -> usize {
                 $group
@@ -110,13 +130,8 @@ macro_rules! impl_wake_up_input {
             fn subgroup(&self) -> u8 {
                 $subgroup
             }
-            fn port(&self) -> &'static crate::pac::miwu0::RegisterBlock {
-                let ptr = $port;
-
-                // Safety:
-                // the pac ptr functions return pointers to memory that is used for registers for the 'static lifetime
-                // and the created reference is shared.
-                unsafe { &*ptr }
+            fn port_n(&self) -> usize {
+                $miwu_n
             }
             fn interrupt(&self) -> crate::pac::Interrupt {
                 crate::pac::Interrupt::$interrupt
@@ -127,30 +142,50 @@ macro_rules! impl_wake_up_input {
 }
 
 // MIWU1 - WUI73 - WKINTG_1
-
-impl_wake_up_input!(MIWU1_73, crate::pac::Miwu1::ptr(), 6, 3, WKINTG_1);
+impl_wake_up_input!(MIWU1_73, 1, 6, 3, WKINTG_1);
 
 #[cfg(feature = "rt")]
-mod rt {
+pub mod rt {
+    use super::*;
     use crate::pac::interrupt;
+    use core::{
+        future::Future,
+        task::{Context, Poll},
+    };
     use embassy_sync::waitqueue::AtomicWaker;
 
-    const MIWU_COUNT: usize = 3;
+    // Note: having 196 wakers costs quite a bit of RAM.
+    // If desired, change to or add intrusive linked list waker to save RAM.
     const WUI_COUNT: usize = 64 * MIWU_COUNT;
     static MIWU_WAKERS: [AtomicWaker; WUI_COUNT] = [const { AtomicWaker::new() }; WUI_COUNT];
 
-    const fn get_miwu(n: usize) -> &'static crate::pac::miwu0::RegisterBlock {
-        const MIWU_N: [*const crate::pac::miwu0::RegisterBlock; MIWU_COUNT] = [
-            crate::pac::Miwu0::ptr(),
-            crate::pac::Miwu1::ptr(),
-            crate::pac::Miwu2::ptr(),
-        ];
+    pub trait WakeUpInputWaitable: WakeUpInput + Sized {
+        async fn wait_for_pending(&mut self) {
+            WakeUpInputFuture::<Self> { channel: &self }.await
+        }
 
-        let ptr = MIWU_N[n];
-        // Safety:
-        // the pac ptr functions return pointers to memory that is used for registers for the 'static lifetime
-        // and the created reference is shared.
-        unsafe { &*ptr }
+        fn waker(&self) -> &'static AtomicWaker {
+            let wui_i = self.port_n() * self.group() * self.subgroup() as usize;
+            &MIWU_WAKERS[wui_i]
+        }
+    }
+
+    struct WakeUpInputFuture<'a, T: WakeUpInputWaitable> {
+        channel: &'a T,
+    }
+
+    impl<'a, T: WakeUpInputWaitable> Future for WakeUpInputFuture<'a, T> {
+        type Output = ();
+
+        fn poll(self: core::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            self.channel.waker().register(cx.waker());
+
+            if self.channel.is_pending() {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        }
     }
 
     struct BitIter(u8);
