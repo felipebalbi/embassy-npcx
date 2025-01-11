@@ -12,11 +12,14 @@ repository = "https://github.com/pop-project/embassy-npcx"
 rust-version = "1.80.0"
 
 [features]
+default = ["rt"]
 defmt = ["dep:defmt"]
+rt = []
 
 [dependencies]
 npcx490m-pac = { git = "https://github.com/pop-project/npcx490m-pac", features = ["rt", "critical-section"] }
 embassy-hal-internal = { git = "https://github.com/embassy-rs/embassy", features = ["cortex-m", "prio-bits-0"] }
+embassy-sync = { git = "https://github.com/embassy-rs/embassy" }
 critical-section = "1.1"
 defmt = { version = "0.3", optional = true }
 embedded-hal = "1.0.0"
