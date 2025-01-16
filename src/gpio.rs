@@ -599,17 +599,17 @@ pub trait InputPin: Pin + sealed::SealedInputPin {}
 pub trait Pin: sealed::SealedPin {}
 
 macro_rules! impl_pin {
-    ($peripheral:ident, $port:expr, $pin:expr, $pin_function:expr) => {
+    ($peripheral:ident, $port:ident, $pin:expr, $pin_function:expr) => {
         impl_pin!($peripheral, $port, $pin, $pin_function, |_, _| {});
     };
-    ($peripheral:ident, $port:expr, $pin:expr, $pin_function:expr, $low_voltage_function:expr) => {
+    ($peripheral:ident, $port:ident, $pin:expr, $pin_function:expr, $low_voltage_function:expr) => {
         impl sealed::SealedPin for crate::peripherals::$peripheral {
             fn pin(&self) -> u8 {
                 $pin
             }
 
             fn port(&self) -> &'static crate::pac::gpio0::RegisterBlock {
-                let ptr = $port;
+                let ptr = crate::pac::$port::ptr();
 
                 // Safety:
                 // the pac ptr functions return pointers to memory that is used for registers for the 'static lifetime
@@ -640,10 +640,10 @@ macro_rules! impl_pin {
 }
 
 macro_rules! impl_input_pin {
-    ($peripheral:ident, $port:expr, $pin:expr, $pin_function:expr) => {
+    ($peripheral:ident, $port:ident, $pin:expr, $pin_function:expr) => {
         impl_input_pin!($peripheral, $port, $pin, $pin_function, |_, _| {});
     };
-    ($peripheral:ident, $port:expr, $pin:expr, $pin_function:expr, $low_voltage_function:expr) => {
+    ($peripheral:ident, $port:ident, $pin:expr, $pin_function:expr, $low_voltage_function:expr) => {
         impl_pin!($peripheral, $port, $pin, $pin_function, $low_voltage_function);
         impl sealed::SealedInputPin for crate::peripherals::$peripheral {}
         impl InputPin for crate::peripherals::$peripheral {}
@@ -651,7 +651,7 @@ macro_rules! impl_input_pin {
 }
 
 macro_rules! impl_lowvoltage_pin {
-    ($peripheral:ident, $port:expr, $pin:expr, $pin_function:expr, $low_voltage_function:expr) => {
+    ($peripheral:ident, $port:ident, $pin:expr, $pin_function:expr, $low_voltage_function:expr) => {
         impl_input_pin!($peripheral, $port, $pin, $pin_function, $low_voltage_function);
         impl sealed::SealedLowVoltagePin for crate::peripherals::$peripheral {}
         impl LowVoltagePin for crate::peripherals::$peripheral {}
@@ -661,7 +661,7 @@ macro_rules! impl_lowvoltage_pin {
 // GPIO0
 impl_lowvoltage_pin!(
     PE07,
-    crate::pac::Gpio0::ptr(),
+    Gpio0,
     0,
     |regs| {
         regs.devaltd().modify(|_, w| w.n_psl_in2_sl().set_bit());
@@ -673,7 +673,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PE06,
-    crate::pac::Gpio0::ptr(),
+    Gpio0,
     1,
     |regs| {
         regs.devaltd().modify(|_, w| w.psl_in3_sl().clear_bit());
@@ -684,7 +684,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PF07,
-    crate::pac::Gpio0::ptr(),
+    Gpio0,
     2,
     |regs| {
         regs.devaltd().modify(|_, w| w.psl_in4_sl().clear_bit());
@@ -695,7 +695,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PD09,
-    crate::pac::Gpio0::ptr(),
+    Gpio0,
     3,
     |regs| {
         regs.devalta().modify(|_, w| w.no_kso16_sl().set_bit());
@@ -706,7 +706,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PD11,
-    crate::pac::Gpio0::ptr(),
+    Gpio0,
     4,
     |regs| {
         regs.devalt9().modify(|_, w| w.no_kso13_sl().set_bit());
@@ -717,7 +717,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PC11,
-    crate::pac::Gpio0::ptr(),
+    Gpio0,
     5,
     |regs| {
         regs.devalt9().modify(|_, w| w.no_kso12_sl().set_bit());
@@ -728,7 +728,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PB10,
-    crate::pac::Gpio0::ptr(),
+    Gpio0,
     6,
     |regs| {
         regs.devalt9().modify(|_, w| w.no_kso11_sl().set_bit());
@@ -739,7 +739,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PB11,
-    crate::pac::Gpio0::ptr(),
+    Gpio0,
     7,
     |regs| {
         regs.devalt9().modify(|_, w| w.no_kso10_sl().set_bit());
@@ -752,7 +752,7 @@ impl_lowvoltage_pin!(
 // GPIO1
 impl_lowvoltage_pin!(
     PC10,
-    crate::pac::Gpio1::ptr(),
+    Gpio1,
     0,
     |regs| {
         regs.devalt9().modify(|_, w| w.no_kso09_sl().set_bit());
@@ -764,7 +764,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PC09,
-    crate::pac::Gpio1::ptr(),
+    Gpio1,
     1,
     |regs| {
         regs.devalt9().modify(|_, w| w.no_kso08_sl().set_bit());
@@ -774,12 +774,12 @@ impl_lowvoltage_pin!(
         regs.lv_gpio_ctl6().modify(|_, w| w.g11_lv().bit(state));
     }
 );
-impl_input_pin!(PB09, crate::pac::Gpio1::ptr(), 2, |regs| {
+impl_input_pin!(PB09, Gpio1, 2, |regs| {
     regs.devalt8().modify(|_, w| w.no_kso07_sl().set_bit());
 });
 impl_lowvoltage_pin!(
     PC08,
-    crate::pac::Gpio1::ptr(),
+    Gpio1,
     3,
     |regs| {
         regs.devalt8().modify(|_, w| w.no_kso06_sl().set_bit());
@@ -790,7 +790,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PC06,
-    crate::pac::Gpio1::ptr(),
+    Gpio1,
     4,
     |regs| {
         regs.devalt8().modify(|_, w| w.no_kso05_sl().set_bit());
@@ -801,7 +801,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PC07,
-    crate::pac::Gpio1::ptr(),
+    Gpio1,
     5,
     |regs| {
         regs.devalt8().modify(|_, w| w.no_kso04_sl().set_bit());
@@ -813,7 +813,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PB08,
-    crate::pac::Gpio1::ptr(),
+    Gpio1,
     6,
     |regs| {
         regs.devalt8().modify(|_, w| w.no_kso03_sl().set_bit());
@@ -826,7 +826,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PB07,
-    crate::pac::Gpio1::ptr(),
+    Gpio1,
     7,
     |regs| {
         regs.devalt8().modify(|_, w| w.no_kso02_sl().set_bit());
@@ -841,7 +841,7 @@ impl_lowvoltage_pin!(
 // GPIO2
 impl_lowvoltage_pin!(
     PB06,
-    crate::pac::Gpio2::ptr(),
+    Gpio2,
     0,
     |regs| {
         regs.devalt8().modify(|_, w| w.no_kso01_sl().set_bit());
@@ -854,7 +854,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PB05,
-    crate::pac::Gpio2::ptr(),
+    Gpio2,
     1,
     |regs| {
         regs.devalt8().modify(|_, w| w.no_kso00_sl().set_bit());
@@ -867,7 +867,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PC05,
-    crate::pac::Gpio2::ptr(),
+    Gpio2,
     2,
     |regs| {
         regs.devalt7().modify(|_, w| w.no_ksi7_sl().set_bit());
@@ -883,7 +883,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PC04,
-    crate::pac::Gpio2::ptr(),
+    Gpio2,
     3,
     |regs| {
         regs.devalt7().modify(|_, w| w.no_ksi6_sl().set_bit());
@@ -897,43 +897,43 @@ impl_lowvoltage_pin!(
         regs.lv_gpio_ctl7().modify(|_, w| w.g23_lv().bit(state));
     }
 );
-impl_input_pin!(PC03, crate::pac::Gpio2::ptr(), 4, |regs| {
+impl_input_pin!(PC03, Gpio2, 4, |regs| {
     regs.devalt7().modify(|_, w| w.no_ksi5_sl().set_bit());
     regs.devaltf().modify(|_, w| w.ad12_sl().clear_bit());
 });
-impl_input_pin!(PB04, crate::pac::Gpio2::ptr(), 5, |regs| {
+impl_input_pin!(PB04, Gpio2, 5, |regs| {
     regs.devalt7().modify(|_, w| w.no_ksi4_sl().set_bit());
     regs.devaltm().modify(|_, w| w.ad24_sl().clear_bit());
     regs.devalt5().modify(|_, w| w.trace_en().clear_bit());
 });
-impl_input_pin!(PB03, crate::pac::Gpio2::ptr(), 6, |regs| {
+impl_input_pin!(PB03, Gpio2, 6, |regs| {
     regs.devalt7().modify(|_, w| w.no_ksi3_sl().set_bit());
     regs.devaltl().modify(|_, w| w.ad13_sl().clear_bit());
     regs.devalt5().modify(|_, w| w.trace_en().clear_bit());
 });
-impl_input_pin!(PA04, crate::pac::Gpio2::ptr(), 7, |regs| {
+impl_input_pin!(PA04, Gpio2, 7, |regs| {
     regs.devalt7().modify(|_, w| w.no_ksi2_sl().set_bit());
     regs.devalt5().modify(|_, w| w.trace_en().clear_bit());
     regs.devaltl().modify(|_, w| w.ad14_sl().clear_bit());
 });
 
 // GPIO3
-impl_input_pin!(PA03, crate::pac::Gpio3::ptr(), 0, |regs| {
+impl_input_pin!(PA03, Gpio3, 0, |regs| {
     regs.devalt7().modify(|_, w| w.no_ksi1_sl().set_bit());
     regs.devaltm().modify(|_, w| w.ad25_sl().clear_bit());
     regs.devalt5().modify(|_, w| w.trace_en().clear_bit());
 });
-impl_input_pin!(PA02, crate::pac::Gpio3::ptr(), 1, |regs| {
+impl_input_pin!(PA02, Gpio3, 1, |regs| {
     regs.devalt7().modify(|_, w| w.no_ksi0_sl().set_bit());
     regs.devaltl().modify(|_, w| w.ad15_sl().clear_bit());
     regs.devalt5().modify(|_, w| w.trace_en().clear_bit());
 });
-impl_pin!(PE04, crate::pac::Gpio3::ptr(), 2, |_| {
+impl_pin!(PE04, Gpio3, 2, |_| {
     // No need to disconnect nTRIS strap
 });
 impl_lowvoltage_pin!(
     PD05,
-    crate::pac::Gpio3::ptr(),
+    Gpio3,
     3,
     |regs| {
         regs.devalt2().modify(|_, w| w.i2c5_0_sl().clear_bit());
@@ -945,7 +945,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PB02,
-    crate::pac::Gpio3::ptr(),
+    Gpio3,
     4,
     |regs| {
         regs.devalt3().modify(|_, w| w.ps2_2_sl().clear_bit());
@@ -955,13 +955,13 @@ impl_lowvoltage_pin!(
         regs.lv_gpio_ctl2().modify(|_, w| w.g34_lv().bit(state));
     }
 );
-impl_pin!(PK02, crate::pac::Gpio3::ptr(), 5, |regs| {
+impl_pin!(PK02, Gpio3, 5, |regs| {
     regs.devalte().modify(|_, w| w.cr_sout4_sl().clear_bit());
     // No need to disconnect nTEST strap
 });
 impl_lowvoltage_pin!(
     PD04,
-    crate::pac::Gpio3::ptr(),
+    Gpio3,
     6,
     |regs| {
         regs.devalt2().modify(|_, w| w.i2c5_0_sl().clear_bit());
@@ -973,7 +973,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PC01,
-    crate::pac::Gpio3::ptr(),
+    Gpio3,
     7,
     |regs| {
         regs.devalt3().modify(|_, w| w.ps2_2_sl().clear_bit());
@@ -987,7 +987,7 @@ impl_lowvoltage_pin!(
 // GPIO4
 impl_lowvoltage_pin!(
     PE05,
-    crate::pac::Gpio4::ptr(),
+    Gpio4,
     0,
     |regs| {
         regs.devalt3().modify(|_, w| w.ta1_sl1().clear_bit());
@@ -998,7 +998,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PC02,
-    crate::pac::Gpio4::ptr(),
+    Gpio4,
     1,
     |regs| {
         regs.devalt6().modify(|_, w| w.ad4_sl().clear_bit());
@@ -1009,7 +1009,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PD03,
-    crate::pac::Gpio4::ptr(),
+    Gpio4,
     2,
     |regs| {
         regs.devalt6().modify(|_, w| w.ad3_sl().clear_bit());
@@ -1021,7 +1021,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PE02,
-    crate::pac::Gpio4::ptr(),
+    Gpio4,
     3,
     |regs| {
         regs.devalt6().modify(|_, w| w.ad2_sl().clear_bit());
@@ -1032,7 +1032,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PE03,
-    crate::pac::Gpio4::ptr(),
+    Gpio4,
     4,
     |regs| {
         regs.devalt6().modify(|_, w| w.ad1_sl().clear_bit());
@@ -1043,7 +1043,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PF02,
-    crate::pac::Gpio4::ptr(),
+    Gpio4,
     5,
     |regs| {
         regs.devalt6().modify(|_, w| w.ad0_sl().clear_bit());
@@ -1052,11 +1052,11 @@ impl_lowvoltage_pin!(
         regs.lv_gpio_ctl8().modify(|_, w| w.g45_lv().bit(state));
     }
 );
-impl_input_pin!(PH01, crate::pac::Gpio4::ptr(), 6, |regs| {
+impl_input_pin!(PH01, Gpio4, 6, |regs| {
     regs.devalt1().modify(|_, w| w.no_lpc_espi().set_bit());
     regs.devaltc().modify(|_, w| w.shi_sl().clear_bit());
 });
-impl_input_pin!(PJ01, crate::pac::Gpio4::ptr(), 7, |regs| {
+impl_input_pin!(PJ01, Gpio4, 7, |regs| {
     regs.devalt1().modify(|_, w| w.no_lpc_espi().set_bit());
     regs.devaltc().modify(|_, w| w.shi_sl().clear_bit());
 });
@@ -1064,7 +1064,7 @@ impl_input_pin!(PJ01, crate::pac::Gpio4::ptr(), 7, |regs| {
 // GPIO5
 impl_lowvoltage_pin!(
     PG10,
-    crate::pac::Gpio5::ptr(),
+    Gpio5,
     0,
     |regs| {
         regs.devaltn().modify(|_, w| w.i3c2_sl().clear_bit());
@@ -1073,38 +1073,38 @@ impl_lowvoltage_pin!(
         regs.lv_gpio_ctl5().modify(|_, w| w.g50_lv().bit(state));
     }
 );
-impl_input_pin!(PK01, crate::pac::Gpio5::ptr(), 1, |regs| {
+impl_input_pin!(PK01, Gpio5, 1, |regs| {
     regs.devalt1().modify(|_, w| w.no_lpc_espi().set_bit());
     regs.devaltc().modify(|_, w| w.shi_sl().clear_bit());
 });
-impl_input_pin!(PL01, crate::pac::Gpio5::ptr(), 2, |regs| {
+impl_input_pin!(PL01, Gpio5, 2, |regs| {
     regs.devalt1().modify(|_, w| w.no_lpc_espi().set_bit());
     regs.devaltc().modify(|_, w| w.shi_sl().clear_bit());
 });
-impl_input_pin!(PL02, crate::pac::Gpio5::ptr(), 3, |regs| {
+impl_input_pin!(PL02, Gpio5, 3, |regs| {
     regs.devalt1().modify(|_, w| w.no_lpc_espi().set_bit());
     regs.devaltc().modify(|_, w| w.shi_sl().clear_bit());
 });
-impl_input_pin!(PK03, crate::pac::Gpio5::ptr(), 4, |regs| {
+impl_input_pin!(PK03, Gpio5, 4, |regs| {
     regs.devalt1().modify(|_, w| w.no_lpc_espi().set_bit());
     regs.devaltc().modify(|_, w| w.shi_sl().clear_bit());
 });
-impl_input_pin!(PM01, crate::pac::Gpio5::ptr(), 5, |regs| {
+impl_input_pin!(PM01, Gpio5, 5, |regs| {
     regs.devalt1().modify(|_, w| w.no_lpc_espi().set_bit());
     regs.devaltc().modify(|_, w| w.shi_sl().clear_bit());
 });
-impl_input_pin!(PM02, crate::pac::Gpio5::ptr(), 6, |regs| {
+impl_input_pin!(PM02, Gpio5, 6, |regs| {
     regs.devalt1().modify(|_, w| w.clkrn_sl().clear_bit());
     regs.devaltn().modify(|_, w| w.i3c2_sl().clear_bit());
 });
-impl_input_pin!(PL03, crate::pac::Gpio5::ptr(), 7, |regs| {
+impl_input_pin!(PL03, Gpio5, 7, |regs| {
     regs.devalt1().modify(|_, w| w.no_lpc_espi().set_bit());
 });
 
 // GPIO6
 impl_lowvoltage_pin!(
     PG06,
-    crate::pac::Gpio6::ptr(),
+    Gpio6,
     0,
     |regs| {
         regs.devalt4().modify(|_, w| w.pwm7_sl().clear_bit());
@@ -1115,7 +1115,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PK04,
-    crate::pac::Gpio6::ptr(),
+    Gpio6,
     1,
     |regs| {
         regs.devalt1().modify(|_, w| w.pwroff_sl().clear_bit());
@@ -1126,7 +1126,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PH02,
-    crate::pac::Gpio6::ptr(),
+    Gpio6,
     2,
     |regs| {
         regs.devalt3().modify(|_, w| w.ps2_1_sl().clear_bit());
@@ -1138,7 +1138,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PJ02,
-    crate::pac::Gpio6::ptr(),
+    Gpio6,
     3,
     |regs| {
         regs.devalt3().modify(|_, w| w.ps2_1_sl().clear_bit());
@@ -1151,7 +1151,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PG04,
-    crate::pac::Gpio6::ptr(),
+    Gpio6,
     4,
     |regs| {
         regs.devaltj().modify(|_, w| w.cr_sin1_sl2().clear_bit());
@@ -1160,13 +1160,13 @@ impl_lowvoltage_pin!(
         regs.lv_gpio_ctl1().modify(|_, w| w.g64_lv().bit(state));
     }
 );
-impl_pin!(PH04, crate::pac::Gpio6::ptr(), 5, |regs| {
+impl_pin!(PH04, Gpio6, 5, |regs| {
     regs.devaltj().modify(|_, w| w.cr_sout1_sl2().clear_bit());
     // No need to disable strap
 });
 impl_pin!(
     PG02,
-    crate::pac::Gpio6::ptr(),
+    Gpio6,
     6,
     |_| {
         // No need to disable strap
@@ -1180,7 +1180,7 @@ impl_pin!(
 );
 impl_lowvoltage_pin!(
     PJ03,
-    crate::pac::Gpio6::ptr(),
+    Gpio6,
     7,
     |regs| {
         regs.devalt3().modify(|_, w| w.ps2_0_sl().clear_bit());
@@ -1194,7 +1194,7 @@ impl_lowvoltage_pin!(
 // GPIO7
 impl_lowvoltage_pin!(
     PJ04,
-    crate::pac::Gpio7::ptr(),
+    Gpio7,
     0,
     |regs| {
         regs.devalt3().modify(|_, w| w.ps2_0_sl().clear_bit());
@@ -1206,7 +1206,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PM04,
-    crate::pac::Gpio7::ptr(),
+    Gpio7,
     2,
     |regs| {
         regs.devalt1().modify(|_, w| w.no_pwrgd().set_bit());
@@ -1217,7 +1217,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PG05,
-    crate::pac::Gpio7::ptr(),
+    Gpio7,
     3,
     |regs| {
         regs.devalt3().modify(|_, w| w.ta2_sl1().clear_bit());
@@ -1228,7 +1228,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PH05,
-    crate::pac::Gpio7::ptr(),
+    Gpio7,
     4,
     |regs| {
         regs.devaltm().modify(|_, w| w.ad23_sl().clear_bit());
@@ -1239,7 +1239,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PJ06,
-    crate::pac::Gpio7::ptr(),
+    Gpio7,
     5,
     |regs| {
         regs.devalta().modify(|_, w| w._32k_out_sl().clear_bit());
@@ -1253,7 +1253,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PJ05,
-    crate::pac::Gpio7::ptr(),
+    Gpio7,
     6,
     |regs| {
         regs.devalt1().modify(|_, w| w.ec_sci_sl().clear_bit());
@@ -1262,14 +1262,14 @@ impl_lowvoltage_pin!(
         regs.lv_gpio_ctl9().modify(|_, w| w.g76_lv().bit(state));
     }
 );
-impl_pin!(PK06, crate::pac::Gpio7::ptr(), 7, |regs| {
+impl_pin!(PK06, Gpio7, 7, |regs| {
     regs.devalta().modify(|_, w| w.no_vcc1_rst().set_bit());
 });
 
 // GPIO8
 impl_lowvoltage_pin!(
     PK05,
-    crate::pac::Gpio8::ptr(),
+    Gpio8,
     0,
     |regs| {
         regs.devalt4().modify(|_, w| w.pwm3_sl().clear_bit());
@@ -1278,12 +1278,12 @@ impl_lowvoltage_pin!(
         regs.lv_gpio_ctl3().modify(|_, w| w.g80_lv().bit(state));
     }
 );
-impl_input_pin!(PM07, crate::pac::Gpio8::ptr(), 1, |regs| {
+impl_input_pin!(PM07, Gpio8, 1, |regs| {
     regs.devalta().modify(|_, w| w.no_peci_en().set_bit());
 });
 impl_lowvoltage_pin!(
     PD06,
-    crate::pac::Gpio8::ptr(),
+    Gpio8,
     2,
     |regs| {
         regs.devalt9().modify(|_, w| w.no_kso14_sl().set_bit());
@@ -1294,7 +1294,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PD07,
-    crate::pac::Gpio8::ptr(),
+    Gpio8,
     3,
     |regs| {
         regs.devalt9().modify(|_, w| w.no_kso15_sl().set_bit());
@@ -1303,10 +1303,10 @@ impl_lowvoltage_pin!(
         regs.lv_gpio_ctl9().modify(|_, w| w.g83_lv().bit(state));
     }
 );
-impl_pin!(PJ08, crate::pac::Gpio8::ptr(), 5, |regs| {
+impl_pin!(PJ08, Gpio8, 5, |regs| {
     regs.devaltg().modify(|_, w| w.psl_out_sl().clear_bit());
 });
-impl_pin!(PJ09, crate::pac::Gpio8::ptr(), 6, |regs| {
+impl_pin!(PJ09, Gpio8, 6, |regs| {
     regs.devalt2().modify(|_, w| w.i2c4_0_sl().clear_bit());
     regs.devaltb().modify(|_, w| w.txd_sl().clear_bit());
     regs.devaltj().modify(|_, w| w.cr_sout2_sl().clear_bit());
@@ -1314,7 +1314,7 @@ impl_pin!(PJ09, crate::pac::Gpio8::ptr(), 6, |regs| {
 });
 impl_lowvoltage_pin!(
     PK07,
-    crate::pac::Gpio8::ptr(),
+    Gpio8,
     7,
     |regs| {
         regs.devalt2().modify(|_, w| w.i2c1_0_sl().clear_bit());
@@ -1327,7 +1327,7 @@ impl_lowvoltage_pin!(
 // GPIO9
 impl_lowvoltage_pin!(
     PK08,
-    crate::pac::Gpio9::ptr(),
+    Gpio9,
     0,
     |regs| {
         regs.devalt2().modify(|_, w| w.i2c1_0_sl().clear_bit());
@@ -1338,7 +1338,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PK09,
-    crate::pac::Gpio9::ptr(),
+    Gpio9,
     1,
     |regs| {
         regs.devalt2().modify(|_, w| w.i2c2_0_sl().clear_bit());
@@ -1349,7 +1349,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PL08,
-    crate::pac::Gpio9::ptr(),
+    Gpio9,
     2,
     |regs| {
         regs.devalt2().modify(|_, w| w.i2c2_0_sl().clear_bit());
@@ -1358,53 +1358,53 @@ impl_lowvoltage_pin!(
         regs.lv_gpio_ctl1().modify(|_, w| w.g92_lv().bit(state));
     }
 );
-impl_input_pin!(PE11, crate::pac::Gpio9::ptr(), 3, |regs| {
+impl_input_pin!(PE11, Gpio9, 3, |regs| {
     regs.devaltc().modify(|_, w| w.ta1_sl2().clear_bit());
     regs.devalt0().modify(|_, w| w.f_spi_quad().clear_bit());
     regs.devalth().modify(|_, w| w.flm_sl().clear_bit());
 });
-impl_input_pin!(PM11, crate::pac::Gpio9::ptr(), 4, |_| {});
-impl_input_pin!(PM12, crate::pac::Gpio9::ptr(), 5, |regs| {
+impl_input_pin!(PM11, Gpio9, 4, |_| {});
+impl_input_pin!(PM12, Gpio9, 5, |regs| {
     regs.devalt0().modify(|_, w| w.spip_sl().clear_bit());
     regs.devalt0().modify(|_, w| w.gpio_no_spip().set_bit());
 });
-impl_input_pin!(PG12, crate::pac::Gpio9::ptr(), 6, |regs| {
+impl_input_pin!(PG12, Gpio9, 6, |regs| {
     regs.devalth().modify(|_, w| w.flm_sl().clear_bit());
     regs.devalt0().modify(|_, w| w.no_f_spi().set_bit());
 });
-impl_input_pin!(PL10, crate::pac::Gpio9::ptr(), 7, |regs| {
+impl_input_pin!(PL10, Gpio9, 7, |regs| {
     regs.devalt0().modify(|_, w| w.gpio_no_spip().set_bit());
 });
 
 // GPIOA
-impl_input_pin!(PG11, crate::pac::Gpioa::ptr(), 0, |regs| {
+impl_input_pin!(PG11, Gpioa, 0, |regs| {
     regs.devalth().modify(|_, w| w.flm_sl().clear_bit());
     regs.devalt0().modify(|_, w| w.no_f_spi().set_bit());
 });
-impl_input_pin!(PL12, crate::pac::Gpioa::ptr(), 1, |regs| {
+impl_input_pin!(PL12, Gpioa, 1, |regs| {
     regs.devalt0().modify(|_, w| w.spip_sl().clear_bit());
     regs.devalt0().modify(|_, w| w.gpio_no_spip().set_bit());
 });
-impl_input_pin!(PF12, crate::pac::Gpioa::ptr(), 2, |regs| {
+impl_input_pin!(PF12, Gpioa, 2, |regs| {
     regs.devalth().modify(|_, w| w.flm_sl().clear_bit());
     regs.devalt0().modify(|_, w| w.no_f_spi().set_bit());
 });
-impl_input_pin!(PK12, crate::pac::Gpioa::ptr(), 3, |regs| {
+impl_input_pin!(PK12, Gpioa, 3, |regs| {
     regs.devalt0().modify(|_, w| w.spip_sl().clear_bit());
     regs.devalt0().modify(|_, w| w.gpio_no_spip().set_bit());
 });
-impl_input_pin!(PH11, crate::pac::Gpioa::ptr(), 4, |regs| {
+impl_input_pin!(PH11, Gpioa, 4, |regs| {
     regs.devalth().modify(|_, w| w.flm_sl().clear_bit());
     regs.devalt0().modify(|_, w| w.no_f_spi().set_bit());
     regs.devalt3().modify(|_, w| w.tb1_sl1().clear_bit());
 });
-impl_input_pin!(PK11, crate::pac::Gpioa::ptr(), 5, |_| {});
-impl_input_pin!(PF11, crate::pac::Gpioa::ptr(), 6, |regs| {
+impl_input_pin!(PK11, Gpioa, 5, |_| {});
+impl_input_pin!(PF11, Gpioa, 6, |regs| {
     regs.devaltc().modify(|_, w| w.ps2_3_sl2().clear_bit());
     regs.devaltc().modify(|_, w| w.ta2_sl2().clear_bit());
     regs.devalt0().modify(|_, w| w.f_spi_cs1().clear_bit());
 });
-impl_input_pin!(PJ11, crate::pac::Gpioa::ptr(), 7, |regs| {
+impl_input_pin!(PJ11, Gpioa, 7, |regs| {
     regs.devaltc().modify(|_, w| w.ps2_3_sl2().clear_bit());
     regs.devaltc().modify(|_, w| w.tb2_sl2().clear_bit());
     regs.devalt0().modify(|_, w| w.f_spi_quad().clear_bit());
@@ -1412,10 +1412,10 @@ impl_input_pin!(PJ11, crate::pac::Gpioa::ptr(), 7, |regs| {
 });
 
 // GPIOB
-impl_input_pin!(PL11, crate::pac::Gpiob::ptr(), 0, |_| {});
+impl_input_pin!(PL11, Gpiob, 0, |_| {});
 impl_lowvoltage_pin!(
     PD08,
-    crate::pac::Gpiob::ptr(),
+    Gpiob,
     1,
     |regs| {
         regs.devalta().modify(|_, w| w.no_kso17_sl().set_bit());
@@ -1427,7 +1427,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PK10,
-    crate::pac::Gpiob::ptr(),
+    Gpiob,
     2,
     |regs| {
         regs.devalt2().modify(|_, w| w.i2c7_0_sl().clear_bit());
@@ -1439,7 +1439,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PJ10,
-    crate::pac::Gpiob::ptr(),
+    Gpiob,
     3,
     |regs| {
         regs.devalt2().modify(|_, w| w.i2c7_0_sl().clear_bit());
@@ -1451,7 +1451,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PB12,
-    crate::pac::Gpiob::ptr(),
+    Gpiob,
     4,
     |regs| {
         regs.devalt2().modify(|_, w| w.i2c0_0_sl().clear_bit());
@@ -1462,7 +1462,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PC12,
-    crate::pac::Gpiob::ptr(),
+    Gpiob,
     5,
     |regs| {
         regs.devalt2().modify(|_, w| w.i2c0_0_sl().clear_bit());
@@ -1473,7 +1473,7 @@ impl_lowvoltage_pin!(
 );
 impl_pin!(
     PL09,
-    crate::pac::Gpiob::ptr(),
+    Gpiob,
     6,
     |regs| {
         regs.devalt4().modify(|_, w| w.pwm4_sl().clear_bit());
@@ -1488,7 +1488,7 @@ impl_pin!(
 );
 impl_lowvoltage_pin!(
     PJ07,
-    crate::pac::Gpiob::ptr(),
+    Gpiob,
     7,
     |regs| {
         regs.devalt4().modify(|_, w| w.pwm5_sl().clear_bit());
@@ -1506,7 +1506,7 @@ impl_lowvoltage_pin!(
 // GPIOC
 impl_lowvoltage_pin!(
     PH08,
-    crate::pac::Gpioc::ptr(),
+    Gpioc,
     0,
     |regs| {
         regs.devalt4().modify(|_, w| w.pwm6_sl().clear_bit());
@@ -1522,7 +1522,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PH09,
-    crate::pac::Gpioc::ptr(),
+    Gpioc,
     1,
     |regs| {
         regs.devalt2().modify(|_, w| w.i2c6_0_sl().clear_bit());
@@ -1534,7 +1534,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PH10,
-    crate::pac::Gpioc::ptr(),
+    Gpioc,
     2,
     |regs| {
         regs.devalt4().modify(|_, w| w.pwm1_sl().clear_bit());
@@ -1546,7 +1546,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PG09,
-    crate::pac::Gpioc::ptr(),
+    Gpioc,
     3,
     |regs| {
         regs.devalt4().modify(|_, w| w.pwm0_sl().clear_bit());
@@ -1557,7 +1557,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PG08,
-    crate::pac::Gpioc::ptr(),
+    Gpioc,
     4,
     |regs| {
         regs.devalt4().modify(|_, w| w.pwm2_sl().clear_bit());
@@ -1568,7 +1568,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PH07,
-    crate::pac::Gpioc::ptr(),
+    Gpioc,
     5,
     |regs| {
         regs.devalt1().modify(|_, w| w.kbrst_sl().clear_bit());
@@ -1579,7 +1579,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PD10,
-    crate::pac::Gpioc::ptr(),
+    Gpioc,
     6,
     |regs| {
         regs.devalt1().modify(|_, w| w.smi_sl().clear_bit());
@@ -1590,7 +1590,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PF10,
-    crate::pac::Gpioc::ptr(),
+    Gpioc,
     7,
     |regs| {
         regs.devaltb().modify(|_, w| w.dtr_bout_sl().clear_bit());
@@ -1604,7 +1604,7 @@ impl_lowvoltage_pin!(
 // GPIOD
 impl_lowvoltage_pin!(
     PF09,
-    crate::pac::Gpiod::ptr(),
+    Gpiod,
     0,
     |regs| {
         regs.devalt2().modify(|_, w| w.i2c3_0_sl().clear_bit());
@@ -1617,7 +1617,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PF08,
-    crate::pac::Gpiod::ptr(),
+    Gpiod,
     1,
     |regs| {
         regs.devalt2().modify(|_, w| w.i2c3_0_sl().clear_bit());
@@ -1628,7 +1628,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PG07,
-    crate::pac::Gpiod::ptr(),
+    Gpiod,
     2,
     |regs| {
         regs.devaltd().modify(|_, w| w.n_psl_in1_sl().set_bit());
@@ -1639,7 +1639,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PE10,
-    crate::pac::Gpiod::ptr(),
+    Gpiod,
     3,
     |regs| {
         regs.devaltc().modify(|_, w| w.tb1_sl2().clear_bit());
@@ -1650,7 +1650,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PA09,
-    crate::pac::Gpiod::ptr(),
+    Gpiod,
     4,
     |regs| {
         regs.devaltj().modify(|_, w| w.cr_sin3_sl().clear_bit());
@@ -1663,7 +1663,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PA10,
-    crate::pac::Gpiod::ptr(),
+    Gpiod,
     5,
     |regs| {
         regs.devalt5().modify(|_, w| w.intrud1_sl().clear_bit());
@@ -1676,7 +1676,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PH03,
-    crate::pac::Gpiod::ptr(),
+    Gpiod,
     6,
     |regs| {
         regs.devaltj().modify(|_, w| w.cr_sout3_sl().clear_bit());
@@ -1686,14 +1686,14 @@ impl_lowvoltage_pin!(
         regs.lv_gpio_ctl5().modify(|_, w| w.gd6_lv().bit(state));
     }
 );
-impl_pin!(PH06, crate::pac::Gpiod::ptr(), 7, |regs| {
+impl_pin!(PH06, Gpiod, 7, |regs| {
     regs.devaltg().modify(|_, w| w.psl_gpo_sl().clear_bit());
 });
 
 // GPIOE
 impl_lowvoltage_pin!(
     PF04,
-    crate::pac::Gpioe::ptr(),
+    Gpioe,
     0,
     |regs| {
         regs.devaltf().modify(|_, w| w.ad10_sl().clear_bit());
@@ -1704,7 +1704,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PF03,
-    crate::pac::Gpioe::ptr(),
+    Gpioe,
     1,
     |regs| {
         regs.devaltf().modify(|_, w| w.ad7_sl().clear_bit());
@@ -1715,7 +1715,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PA11,
-    crate::pac::Gpioe::ptr(),
+    Gpioe,
     2,
     |regs| {
         // Note: This messes with debug interfaces, maybe there is a better way?
@@ -1727,7 +1727,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PL07,
-    crate::pac::Gpioe::ptr(),
+    Gpioe,
     3,
     |regs| {
         regs.devalt6().modify(|_, w| w.i2c6_1_sl().clear_bit());
@@ -1739,7 +1739,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PL06,
-    crate::pac::Gpioe::ptr(),
+    Gpioe,
     4,
     |regs| {
         regs.devalt6().modify(|_, w| w.i2c6_1_sl().clear_bit());
@@ -1751,7 +1751,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PA12,
-    crate::pac::Gpioe::ptr(),
+    Gpioe,
     5,
     |regs| {
         // Note: This messes with debug interfaces, maybe there is a better way?
@@ -1763,7 +1763,7 @@ impl_lowvoltage_pin!(
 );
 impl_input_pin!(
     PL05,
-    crate::pac::Gpioe::ptr(),
+    Gpioe,
     7,
     |regs| {
         regs.devalta().modify(|_, w| w._32kclkin_sl().clear_bit());
@@ -1782,7 +1782,7 @@ impl_input_pin!(
 // GPIOF
 impl_lowvoltage_pin!(
     PD02,
-    crate::pac::Gpiof::ptr(),
+    Gpiof,
     0,
     |regs| {
         regs.devaltf().modify(|_, w| w.ad9_sl().clear_bit());
@@ -1793,7 +1793,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PG03,
-    crate::pac::Gpiof::ptr(),
+    Gpiof,
     1,
     |regs| {
         regs.devaltf().modify(|_, w| w.ad8_sl().clear_bit());
@@ -1804,7 +1804,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PF06,
-    crate::pac::Gpiof::ptr(),
+    Gpiof,
     2,
     |regs| {
         regs.devalt6().modify(|_, w| w.i2c4_1_sl().clear_bit());
@@ -1815,7 +1815,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PF05,
-    crate::pac::Gpiof::ptr(),
+    Gpiof,
     3,
     |regs| {
         regs.devalt6().modify(|_, w| w.i2c4_1_sl().clear_bit());
@@ -1826,7 +1826,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PE09,
-    crate::pac::Gpiof::ptr(),
+    Gpiof,
     4,
     |regs| {
         regs.devalt6().modify(|_, w| w.i2c5_1_sl().clear_bit());
@@ -1838,7 +1838,7 @@ impl_lowvoltage_pin!(
 );
 impl_lowvoltage_pin!(
     PE08,
-    crate::pac::Gpiof::ptr(),
+    Gpiof,
     5,
     |regs| {
         regs.devalt6().modify(|_, w| w.i2c5_1_sl().clear_bit());
