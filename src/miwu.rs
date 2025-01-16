@@ -216,6 +216,7 @@ macro_rules! impl_wake_up_input {
                 }
             }
         }
+        impl WakeUpInput for $peripheral {}
     };
 }
 
