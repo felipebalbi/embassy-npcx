@@ -1,6 +1,7 @@
 use core::marker::PhantomData;
 
 use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
+use paste::paste;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -636,6 +637,10 @@ macro_rules! impl_pin {
             }
         }
         impl Pin for crate::peripherals::$peripheral {}
+
+        paste! {
+            pub type [<$port $pin>] = crate::peripherals::$peripheral;
+        }
     };
 }
 
