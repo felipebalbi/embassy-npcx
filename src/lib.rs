@@ -2,6 +2,10 @@
 
 pub mod gpio;
 pub mod miwu;
+
+#[cfg(feature = "rt")]
+pub mod gpio_miwu;
+
 pub use npcx490m_pac as pac;
 
 embassy_hal_internal::peripherals!(
@@ -35,3 +39,74 @@ embassy_hal_internal::peripherals!(
 pub fn init() -> Peripherals {
     Peripherals::take()
 }
+
+#[cfg(feature = "rt")]
+embassy_hal_internal::interrupt_mod!(
+    KBS,
+    PM_OBE,
+    PECI,
+    WKINTD_0,
+    DP80,
+    WKINTA_0,
+    SMB7,
+    MFT16_1,
+    ADC_IREF,
+    WKINTE_0,
+    GDMA1,
+    SMB0,
+    SMB1,
+    WKINTC_0,
+    SMB6,
+    ITIM32_3,
+    ESPI_SHI,
+    SMB4,
+    SMB5,
+    PS2,
+    ADC_EREF,
+    MFT16_2,
+    SHM,
+    KBC_IBF,
+    PM_IBF,
+    ITIM32_2,
+    ITIM32_1,
+    I3C1_MDMA5,
+    FLM,
+    WKINTB_0,
+    CR_UART2_MDMA2,
+    CR_UART1_MDMA1,
+    RNG,
+    WKINTF_0,
+    SMB2,
+    SMB3,
+    CR_UART3_MDMA3,
+    CR_UART4_MDMA4,
+    PKA,
+    MFT16_3,
+    WKINTG_0,
+    ITIM32_4,
+    ITIM32_5,
+    ITIM32_6,
+    WKINTH_0,
+    WKINTA_1,
+    WKINTB_1,
+    WKINTC_1,
+    WKINTD_1,
+    WKINTE_1,
+    WKINTF_1,
+    WKINTG_1,
+    WKINTH_1,
+    WKINTG_2,
+    KBC_OBE,
+    SPIP,
+    WKINTF_2,
+    WKINTA_2,
+    WKINTB_2,
+    WKINTC_2,
+    WKINTD_2,
+    WKINTE_2,
+    GDMA2,
+    I3C2_MDMA6,
+    I3C3_MDMA7,
+    ITIM64,
+    WKINTH_2,
+);

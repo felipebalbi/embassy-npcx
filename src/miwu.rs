@@ -1,4 +1,51 @@
+#![allow(private_interfaces)]
+
+use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
+use paste::paste;
+
 const MIWU_COUNT: usize = 3;
+const SUBGROUP_COUNT: usize = 8;
+const GROUP_COUNT: usize = 8;
+const WUI_COUNT: usize = MIWU_COUNT * GROUP_COUNT * SUBGROUP_COUNT;
+
+/// Index used to access array elements or to store AnyWakeUpInput compactly.
+#[derive(Clone, Copy)]
+struct WuiIndex(u8);
+
+/// Expanded WuiIndex used to meaningfully access registers and their bits.
+#[derive(Clone)]
+struct WuiMap {
+    pub miwu_n: u8,
+    pub group: u8,
+    pub subgroup: u8,
+}
+
+impl WuiMap {
+    pub const fn port(&self) -> &'static crate::pac::miwu0::RegisterBlock {
+        get_miwu(self.miwu_n as usize)
+    }
+}
+
+const fn div_rem(x: u8, y: u8) -> (u8, u8) {
+    (x / y, x % y)
+}
+
+impl WuiIndex {
+    pub const fn new(map: WuiMap) -> Self {
+        Self(map.miwu_n * SUBGROUP_COUNT as u8 * GROUP_COUNT as u8 + map.group * SUBGROUP_COUNT as u8 + map.subgroup)
+    }
+
+    pub const fn to_map(&self) -> WuiMap {
+        let (subgroup, r) = div_rem(self.0, SUBGROUP_COUNT as u8);
+        let (group, miwu_n) = div_rem(r, GROUP_COUNT as u8);
+
+        WuiMap {
+            miwu_n,
+            group,
+            subgroup,
+        }
+    }
+}
 
 const fn get_miwu(n: usize) -> &'static crate::pac::miwu0::RegisterBlock {
     const MIWU_N: [*const crate::pac::miwu0::RegisterBlock; MIWU_COUNT] = [
@@ -32,127 +79,137 @@ pub enum Mode {
 
 mod sealed {
     pub trait SealedWakeUpInput {
-        #[must_use]
-        fn group(&self) -> usize;
-
-        #[must_use]
-        fn subgroup(&self) -> usize;
-
-        #[must_use]
-        fn port_n(&self) -> usize;
-
-        #[must_use]
-        fn interrupt(&self) -> crate::pac::Interrupt;
-
-        fn port(&self) -> &'static crate::pac::miwu0::RegisterBlock {
-            super::get_miwu(self.port_n())
-        }
+        fn as_map(&self) -> super::WuiMap;
     }
 }
 
-pub trait WakeUpInput: sealed::SealedWakeUpInput {
+pub trait WakeUpInput: sealed::SealedWakeUpInput {}
+
+pub struct WakeUp<'d> {
+    wui: PeripheralRef<'d, AnyWakeUpInput>,
+}
+
+impl<'d> WakeUp<'d> {
+    pub fn new(wui: impl Peripheral<P = impl WakeUpInput + 'd> + 'd) -> Self {
+        into_ref!(wui);
+        Self { wui: wui.map_into() }
+    }
+
+    fn as_map(&self) -> WuiMap {
+        self.wui.0.to_map()
+    }
+
     fn enable(&mut self, mode: Mode) {
-        let port = self.port();
+        let map = self.as_map();
+        let port = map.port();
+        let group = map.group as usize;
 
-        critical_section::with(|_cs| {
-            port.wkenn(self.group())
-                .modify(|_, w| w.input(self.subgroup() as u8).disabled());
-
-            let (wkmod, wkaedgn, wkedgn);
-
-            use crate::pac::miwu0::*;
-            match mode {
-                Mode::Level(level) => {
-                    wkmod = wkmodn::InputMode::Level;
-                    wkaedgn = None;
-                    wkedgn = Some(match level {
-                        Level::Low => wkedgn::Edge::LowFalling,
-                        Level::High => wkedgn::Edge::HighRising,
-                    });
-                }
-                Mode::Edge(edge) => {
-                    wkmod = wkmodn::InputMode::Edge;
-                    (wkaedgn, wkedgn) = match edge {
-                        Edge::Any => (Some(wkaedgn::AnyEdge::Any), None),
-                        Edge::Falling => (Some(wkaedgn::AnyEdge::Edge), Some(wkedgn::Edge::LowFalling)),
-                        Edge::Rising => (Some(wkaedgn::AnyEdge::Edge), Some(wkedgn::Edge::HighRising)),
-                    };
-                }
+        use crate::pac::miwu0::*;
+        let (wkmod, wkaedgn, wkedgn);
+        match mode {
+            Mode::Level(level) => {
+                wkmod = wkmodn::InputMode::Level;
+                wkaedgn = None;
+                wkedgn = Some(match level {
+                    Level::Low => wkedgn::Edge::LowFalling,
+                    Level::High => wkedgn::Edge::HighRising,
+                });
             }
+            Mode::Edge(edge) => {
+                wkmod = wkmodn::InputMode::Edge;
+                (wkaedgn, wkedgn) = match edge {
+                    Edge::Any => (Some(wkaedgn::AnyEdge::Any), None),
+                    Edge::Falling => (Some(wkaedgn::AnyEdge::Edge), Some(wkedgn::Edge::LowFalling)),
+                    Edge::Rising => (Some(wkaedgn::AnyEdge::Edge), Some(wkedgn::Edge::HighRising)),
+                };
+            }
+        }
 
-            port.wkmodn(self.group())
-                .modify(|_, w| w.input(self.subgroup() as u8).variant(wkmod));
+        // Note(cs): WakeUpInputs can share MIWU and group, which use the same registers.
+        critical_section::with(|_cs| {
+            port.wkenn(group).modify(|_, w| w.input(map.subgroup).disabled());
+            port.wkmodn(group).modify(|_, w| w.input(map.subgroup).variant(wkmod));
 
             if let Some(wkaedgn) = wkaedgn {
-                port.wkaedgn(self.group())
-                    .modify(|_, w| w.input(self.subgroup() as u8).variant(wkaedgn));
+                port.wkaedgn(group)
+                    .modify(|_, w| w.input(map.subgroup).variant(wkaedgn));
             }
 
             if let Some(wkedgn) = wkedgn {
-                port.wkedgn(self.group())
-                    .modify(|_, w| w.input(self.subgroup() as u8).variant(wkedgn));
+                port.wkedgn(group).modify(|_, w| w.input(map.subgroup).variant(wkedgn));
             }
 
-            port.wkinenn(self.group())
-                .modify(|_, w| w.input(self.subgroup() as u8).enabled());
-            port.wkpcln(self.group())
-                .write(|w| w.input(self.subgroup() as u8).clear());
-            port.wkenn(self.group())
-                .modify(|_, w| w.input(self.subgroup() as u8).enabled());
+            port.wkinenn(group).modify(|_, w| w.input(map.subgroup).enabled());
+            port.wkpcln(group).write(|w| w.input(map.subgroup).clear());
+            port.wkenn(group).modify(|_, w| w.input(map.subgroup).enabled());
         });
     }
 
     fn disable(&mut self) {
+        let map = self.as_map();
+        // Note(cs): WakeUpInputs can share MIWU and group, which use the same registers.
         critical_section::with(|_cs| {
-            self.port()
-                .wkenn(self.group())
-                .modify(|_, w| w.input(self.subgroup() as u8).disabled());
+            map.port()
+                .wkenn(map.group as usize)
+                .modify(|_, w| w.input(map.subgroup).disabled());
         });
     }
 
     fn clear_pending(&mut self) {
-        self.port()
-            .wkpcln(self.group())
-            .write(|w| w.input(self.subgroup() as u8).clear());
+        let map = self.as_map();
+        // Note(no-cs): atomic write to clear a single bit, safe.
+        map.port()
+            .wkpcln(map.group as usize)
+            .write(|w| w.input(map.subgroup).clear());
     }
 
-    fn is_high(&self) -> bool {
-        self.port()
-            .wkstn(self.group())
+    pub fn is_high(&self) -> bool {
+        let map = self.as_map();
+        map.port()
+            .wkstn(map.group as usize)
             .read()
-            .input(self.subgroup() as u8)
+            .input(map.subgroup)
             .is_high()
     }
 
-    fn is_pending(&self) -> bool {
-        self.port()
-            .wkpndn(self.group())
+    pub fn is_pending(&self) -> bool {
+        let map = self.as_map();
+        map.port()
+            .wkpndn(map.group as usize)
             .read()
-            .input(self.subgroup() as u8)
+            .input(map.subgroup)
             .is_pending()
+    }
+}
+
+pub struct AnyWakeUpInput(WuiIndex);
+
+// Allow use of PeripheralRef to do lifetime management
+impl Peripheral for AnyWakeUpInput {
+    type P = AnyWakeUpInput;
+
+    unsafe fn clone_unchecked(&self) -> Self::P {
+        AnyWakeUpInput(self.0.clone())
+    }
+}
+
+impl<T: WakeUpInput> From<T> for AnyWakeUpInput {
+    fn from(value: T) -> Self {
+        AnyWakeUpInput(WuiIndex::new(value.as_map()))
     }
 }
 
 macro_rules! impl_wake_up_input {
     ($peripheral:ty, $miwu_n:expr, $group:expr, $subgroup:expr, $interrupt:ident) => {
         impl sealed::SealedWakeUpInput for $peripheral {
-            fn group(&self) -> usize {
-                $group
-            }
-            fn subgroup(&self) -> usize {
-                $subgroup
-            }
-            fn port_n(&self) -> usize {
-                $miwu_n
-            }
-            fn interrupt(&self) -> crate::pac::Interrupt {
-                crate::pac::Interrupt::$interrupt
+            fn as_map(&self) -> self::WuiMap {
+                self::WuiMap {
+                    miwu_n: $miwu_n,
+                    group: $group,
+                    subgroup: $subgroup,
+                }
             }
         }
-        impl WakeUpInput for $peripheral {}
-
-        #[cfg(feature = "rt")]
-        impl rt::WakeUpInputWaitable for $peripheral {}
     };
 }
 
@@ -166,47 +223,38 @@ pub mod rt {
     };
     use embassy_sync::waitqueue::AtomicWaker;
 
-    // Note: having 196 wakers costs quite a bit of RAM.
+    // Note: having 192 wakers costs quite a bit of RAM.
     // If desired, change to or add intrusive linked list waker to save RAM.
-    const SUBGROUP_COUNT: usize = 8;
-    const GROUP_COUNT: usize = 8;
-    const WUI_COUNT: usize = MIWU_COUNT * GROUP_COUNT * SUBGROUP_COUNT;
     static MIWU_WAKERS: [AtomicWaker; WUI_COUNT] = [const { AtomicWaker::new() }; WUI_COUNT];
 
-    const fn get_wui_i(miwu_n: usize, group: usize, subgroup: usize) -> usize {
-        miwu_n * SUBGROUP_COUNT * GROUP_COUNT + group * SUBGROUP_COUNT + subgroup
+    const fn get_waker(map: WuiMap) -> &'static AtomicWaker {
+        &MIWU_WAKERS[WuiIndex::new(map).0 as usize]
     }
 
-    fn get_wui(miwu_n: usize, group: usize, subgroup: usize) -> &'static AtomicWaker {
-        &MIWU_WAKERS[get_wui_i(miwu_n, group, subgroup)]
-    }
-
-    pub trait WakeUpInputWaitable: WakeUpInput + Sized {
-        fn wait_for(&mut self, mode: Mode) -> impl Future {
+    impl<'d> WakeUp<'d> {
+        pub async fn wait_for(&mut self, mode: Mode) {
             self.enable(mode);
-            WakeUpInputFuture::<Self> { channel: self }
+            WakeUpInputFuture::<'_, 'd> { channel: self }.await
         }
 
-        fn wait_for_high(&mut self) -> impl Future {
-            self.wait_for(Mode::Level(Level::High))
+        pub async fn wait_for_high(&mut self) {
+            self.wait_for(Mode::Level(Level::High)).await
         }
 
-        fn wait_for_low(&mut self) -> impl Future {
-            self.wait_for(Mode::Level(Level::Low))
+        pub async fn wait_for_low(&mut self) {
+            self.wait_for(Mode::Level(Level::Low)).await
         }
-    }
 
-    struct WakeUpInputFuture<'a, T: WakeUpInputWaitable> {
-        channel: &'a mut T,
-    }
-
-    impl<'a, T: WakeUpInputWaitable> WakeUpInputFuture<'a, T> {
         fn waker(&self) -> &'static AtomicWaker {
-            get_wui(self.channel.port_n(), self.channel.group(), self.channel.subgroup())
+            get_waker(self.as_map())
         }
     }
 
-    impl<'a, T: WakeUpInputWaitable> Drop for WakeUpInputFuture<'a, T> {
+    struct WakeUpInputFuture<'a, 'd> {
+        channel: &'a mut WakeUp<'d>,
+    }
+
+    impl<'a, 'd> Drop for WakeUpInputFuture<'a, 'd> {
         fn drop(&mut self) {
             // Clean up, and do not assume that the interrupt has run.
             self.channel.disable();
@@ -214,11 +262,11 @@ pub mod rt {
         }
     }
 
-    impl<'a, T: WakeUpInputWaitable> Future for WakeUpInputFuture<'a, T> {
+    impl<'a, 'd> Future for WakeUpInputFuture<'a, 'd> {
         type Output = ();
 
         fn poll(self: core::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-            self.waker().register(cx.waker());
+            self.channel.waker().register(cx.waker());
 
             if self.channel.is_pending() {
                 Poll::Ready(())
@@ -249,7 +297,11 @@ pub mod rt {
 
         let pending = port.wkpndn(group).read();
         for subgroup in BitIter(pending.bits()) {
-            let waker = get_wui(miwu_n, group, subgroup as usize);
+            let waker = get_waker(WuiMap {
+                miwu_n: miwu_n as u8,
+                group: group as u8,
+                subgroup,
+            });
             waker.wake();
         }
 
@@ -294,8 +346,6 @@ pub mod rt {
     impl_irq!(WKINTG_2, 2, 7);
     impl_irq!(WKINTH_2, 2, 8);
 }
-
-use paste::paste;
 
 macro_rules! impl_wake_up_input_n {
     ($miwu_n:literal, $group:literal, $subgroup:literal, $interrupt:ident) => {
