@@ -3,7 +3,7 @@
 use core::mem::MaybeUninit;
 
 use npcx490m_pac::lfcg::lfcgctl2::XtOscSlEn;
-use npcx490m_pac::{Hfcg, Lfcg};
+use npcx490m_pac::{Hfcg, Lfcg, Shm};
 
 const LFCLK: u32 = 32_768;
 
@@ -50,13 +50,17 @@ pub struct Config {
     /// The divider for the CLK that turns it into the FIU1_CLK
     pub fiu1_divider: Option<AhbDivider>,
 
-    /// The divider for the MCLK that turns it into the APB4_CLK
+    /// The divider for the MCLK that turns it into the APB4_CLK.
+    /// Must be a multiple of [Self::core_clock_prescaler].
     pub apb4_divider: MclkDivider,
-    /// The divider for the MCLK that turns it into the APB3_CLK
+    /// The divider for the MCLK that turns it into the APB3_CLK.
+    /// Must be a multiple of [Self::core_clock_prescaler].
     pub apb3_divider: MclkDivider,
-    /// The divider for the MCLK that turns it into the APB2_CLK
+    /// The divider for the MCLK that turns it into the APB2_CLK.
+    /// Must be a multiple of [Self::core_clock_prescaler].
     pub apb2_divider: MclkDivider,
-    /// The divider for the MCLK that turns it into the APB1_CLK
+    /// The divider for the MCLK that turns it into the APB1_CLK.
+    /// Must be a multiple of [Self::core_clock_prescaler].
     pub apb1_divider: MclkDivider,
 
     /// The divider for the MCLK that turns it into the MCLKD
@@ -91,6 +95,7 @@ pub(crate) fn init_clocks(config: Config) {
     // Safety: These are not given to the user, and thus safe to steal
     let lfcg = unsafe { Lfcg::steal() };
     let hfcg = unsafe { Hfcg::steal() };
+    let shm = unsafe { Shm::steal() };
 
     // 4.32.2
     // Select the low frequency clock LFCLK source
@@ -98,24 +103,11 @@ pub(crate) fn init_clocks(config: Config) {
     lfcg.lfcgctl2()
         .modify(|_, w| w.xt_osc_sl_en().variant(config.lf_clock_source.into()));
 
-    // We may only change the MCLK when the Host interface is reset.
-    // Check that !LRESET and !eSPI_RST signals are asserted.
-    assert!(
-        unsafe { npcx490m_pac::Mswc::steal() }
-            .mswctl1()
-            .read()
-            .lreset_pltrst_act()
-            .bit_is_set(),
-        "LPC host interface must not be active"
-    );
-    assert!(
-        unsafe { npcx490m_pac::Espi::steal() }
-            .espists()
-            .read()
-            .espirst()
-            .bit_is_set(),
-        "ESPI host interface must not be active"
-    );
+    // Disable host access
+    let host_access_stalled = shm.shm_ctl().read().stall_host().bit_is_set();
+    if !host_access_stalled {
+        shm.shm_ctl().modify(|_, w| w.stall_host().set_bit());
+    }
 
     // Calculate the clock up to the MCLK
     assert!(
@@ -179,6 +171,39 @@ pub(crate) fn init_clocks(config: Config) {
 
     let mclkd = mclk / config.mclkd_divider.div_value();
 
+    assert!(apb4_clk <= clk, "APB clock must not exceed the CLK");
+    assert!(apb3_clk <= clk, "APB clock must not exceed the CLK");
+    assert!(apb2_clk <= clk, "APB clock must not exceed the CLK");
+    assert!(apb1_clk <= clk, "APB clock must not exceed the CLK");
+
+    assert!(clk <= 120_000_000, "Max CLK speed is 120 Mhz");
+    assert!(clk >= 4_000_000, "Min CLK speed is 4 Mhz");
+
+    if clk > 60_000_000 {
+        assert!(
+            fiu0_clk.unwrap_or(0) <= clk / 2,
+            "FIUm_CLK frequency must be slower than half CLK if CLK is > 60 Mhz"
+        );
+        assert!(
+            fiu1_clk.unwrap_or(0) <= clk / 2,
+            "FIUm_CLK frequency must be slower than half CLK if CLK is > 60 Mhz"
+        );
+    }
+
+    let apb_dividers = [
+        config.apb1_divider,
+        config.apb2_divider,
+        config.apb3_divider,
+        config.apb4_divider,
+    ];
+    for apb_divider in apb_dividers {
+        assert!(apb_divider.div_value() % config.core_clock_prescaler.div_value() == 0);
+    }
+
+    // TODO: Continue checks/asserts from page bottom of 588 (below table)
+
+    // TODO: When changing prescalers, make sure APB is never higher than CLK, so we need to play with the order
+
     // Set the core clock prescaler all bus dividers
     hfcg.hfcgp().write(|w| unsafe {
         w.fpred()
@@ -208,6 +233,9 @@ pub(crate) fn init_clocks(config: Config) {
     });
     hfcg.hfcbcd3()
         .write(|w| unsafe { w.mclkd_sl().bits(config.mclkd_divider as u8) });
+
+    // Wait at least 16 clock cycles
+    cortex_m::asm::delay(16);
 
     // Set the high frequency values
     hfcg.hfcgn().write(|w| {
@@ -245,6 +273,10 @@ pub(crate) fn init_clocks(config: Config) {
 
             mclkd,
         });
+    }
+
+    if !host_access_stalled {
+        shm.shm_ctl().modify(|_, w| w.stall_host().clear_bit());
     }
 }
 

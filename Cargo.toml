@@ -20,3 +20,4 @@ embassy-hal-internal = { git = "https://github.com/embassy-rs/embassy", features
 critical-section = "1.1"
 defmt = { version = "0.3", optional = true }
 embedded-hal = "1.0.0"
+cortex-m = "0.7.7"
