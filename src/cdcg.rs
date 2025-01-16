@@ -5,6 +5,25 @@ use core::mem::MaybeUninit;
 use npcx490m_pac::lfcg::lfcgctl2::XtOscSlEn;
 use npcx490m_pac::{Hfcg, Lfcg};
 
+const LFCLK: u32 = 32_768;
+
+/// Frozen clock frequencies
+static mut CLOCKS: MaybeUninit<Clocks> = MaybeUninit::uninit();
+
+/// Set the frozen clock frequencies
+///
+/// Safety: May only be used before or in the [init_clocks] function.
+unsafe fn set_clocks(clocks: Clocks) {
+    #[cfg(feature = "defmt")]
+    defmt::debug!("cdcg: {:?}", clocks);
+    CLOCKS = MaybeUninit::new(clocks);
+}
+
+/// Safety: May only be used after the [init_clocks] function.
+pub(crate) unsafe fn get_clocks() -> &'static Clocks {
+    (*&raw mut CLOCKS).assume_init_ref()
+}
+
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -39,6 +58,9 @@ pub struct Config {
     pub apb2_divider: MclkDivider,
     /// The divider for the MCLK that turns it into the APB1_CLK
     pub apb1_divider: MclkDivider,
+
+    /// The divider for the MCLK that turns it into the MCLKD
+    pub mclkd_divider: MclkdDivider,
 }
 
 impl Default for Config {
@@ -58,86 +80,10 @@ impl Default for Config {
             apb3_divider: MclkDivider::Div2,
             apb2_divider: MclkDivider::Div4,
             apb1_divider: MclkDivider::Div8,
+
+            mclkd_divider: MclkdDivider::Div1,
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VoscClockMode {
-    ExtendedFrequency,
-    Normal,
-    Mhz40,
-}
-
-/// The main clock source of the microcontroller.
-/// This clock source powers the LFCLK.
-#[derive(Debug, Copy, Clone)]
-pub enum LfClockSource {
-    /// Use the ~930KHz FRCLK as the source of the low frequency clock (LFCLK)
-    FreeRunningClock,
-    /// Use the 32.768KHz XTCLK crystal as the source of the low frequency clock (LFCLK)
-    ExternalOscillator,
-}
-
-impl From<LfClockSource> for XtOscSlEn {
-    fn from(value: LfClockSource) -> Self {
-        match value {
-            LfClockSource::FreeRunningClock => XtOscSlEn::Lfcg,
-            LfClockSource::ExternalOscillator => XtOscSlEn::Xtosc,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum MclkDivider {
-    Div1 = 0,
-    Div2 = 1,
-    Div3 = 2,
-    Div4 = 3,
-    Div5 = 4,
-    Div6 = 5,
-    Div7 = 6,
-    Div8 = 7,
-    Div9 = 8,
-    Div10 = 9,
-}
-
-impl MclkDivider {
-    fn div_value(&self) -> u32 {
-        *self as u32 + 1
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum AhbDivider {
-    Div1 = 0,
-    Div2 = 1,
-    Div3 = 2,
-}
-
-impl AhbDivider {
-    fn div_value(&self) -> u32 {
-        *self as u32 + 1
-    }
-}
-
-/// Frozen clock frequencies
-static mut CLOCKS: MaybeUninit<Clocks> = MaybeUninit::uninit();
-
-/// Set the frozen clock frequencies
-///
-/// Safety: May only be used before or in the [init_clocks] function.
-unsafe fn set_clocks(clocks: Clocks) {
-    #[cfg(feature = "defmt")]
-    defmt::debug!("cdcg: {:?}", clocks);
-    CLOCKS = MaybeUninit::new(clocks);
-}
-
-/// Safety: May only be used after the [init_clocks] function.
-pub(crate) unsafe fn get_clocks() -> &'static Clocks {
-    (*&raw mut CLOCKS).assume_init_ref()
 }
 
 pub(crate) fn init_clocks(config: Config) {
@@ -231,6 +177,8 @@ pub(crate) fn init_clocks(config: Config) {
     let apb2_clk = mclk / config.apb2_divider.div_value();
     let apb1_clk = mclk / config.apb1_divider.div_value();
 
+    let mclkd = mclk / config.mclkd_divider.div_value();
+
     // Set the core clock prescaler all bus dividers
     hfcg.hfcgp().write(|w| unsafe {
         w.fpred()
@@ -258,6 +206,8 @@ pub(crate) fn init_clocks(config: Config) {
             .apb4div()
             .bits(config.apb4_divider as u8)
     });
+    hfcg.hfcbcd3()
+        .write(|w| unsafe { w.mclkd_sl().bits(config.mclkd_divider as u8) });
 
     // Set the high frequency values
     hfcg.hfcgn().write(|w| {
@@ -292,11 +242,11 @@ pub(crate) fn init_clocks(config: Config) {
             apb3_clk,
             apb2_clk,
             apb1_clk,
+
+            mclkd,
         });
     }
 }
-
-const LFCLK: u32 = 32_768;
 
 #[allow(unused)]
 #[derive(Debug)]
@@ -316,4 +266,81 @@ pub(crate) struct Clocks {
     pub(crate) apb3_clk: u32,
     pub(crate) apb2_clk: u32,
     pub(crate) apb1_clk: u32,
+
+    pub(crate) mclkd: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VoscClockMode {
+    ExtendedFrequency,
+    Normal,
+    Mhz40,
+}
+
+/// The main clock source of the microcontroller.
+/// This clock source powers the LFCLK.
+#[derive(Debug, Copy, Clone)]
+pub enum LfClockSource {
+    /// Use the ~930KHz FRCLK as the source of the low frequency clock (LFCLK)
+    FreeRunningClock,
+    /// Use the 32.768KHz XTCLK crystal as the source of the low frequency clock (LFCLK)
+    ExternalOscillator,
+}
+
+impl From<LfClockSource> for XtOscSlEn {
+    fn from(value: LfClockSource) -> Self {
+        match value {
+            LfClockSource::FreeRunningClock => XtOscSlEn::Lfcg,
+            LfClockSource::ExternalOscillator => XtOscSlEn::Xtosc,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum MclkDivider {
+    Div1 = 0,
+    Div2 = 1,
+    Div3 = 2,
+    Div4 = 3,
+    Div5 = 4,
+    Div6 = 5,
+    Div7 = 6,
+    Div8 = 7,
+    Div9 = 8,
+    Div10 = 9,
+}
+
+impl MclkDivider {
+    fn div_value(&self) -> u32 {
+        *self as u32 + 1
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum AhbDivider {
+    Div1 = 0,
+    Div2 = 1,
+    Div3 = 2,
+}
+
+impl AhbDivider {
+    fn div_value(&self) -> u32 {
+        *self as u32 + 1
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum MclkdDivider {
+    Div1 = 0,
+    Div2 = 1,
+    Div3 = 2,
+}
+
+impl MclkdDivider {
+    fn div_value(&self) -> u32 {
+        *self as u32 + 1
+    }
 }
