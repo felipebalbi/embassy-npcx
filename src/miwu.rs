@@ -182,6 +182,12 @@ impl<'d> WakeUp<'d> {
     }
 }
 
+impl<'d> Drop for WakeUp<'d> {
+    fn drop(&mut self) {
+        self.disable();
+    }
+}
+
 pub struct AnyWakeUpInput(WuiIndex);
 
 // Allow use of PeripheralRef to do lifetime management
