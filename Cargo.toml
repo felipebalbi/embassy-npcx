@@ -11,5 +11,12 @@ categories = [ "embedded", "hardware-support", "no-std", "asynchronous" ]
 repository = "https://github.com/pop-project/embassy-npcx"
 rust-version = "1.80.0"
 
+[features]
+defmt = ["dep:defmt"]
+
 [dependencies]
-npcx490m-pac = { git = "https://github.com/pop-project/npcx490m-pac", features = ["rt", "critical-section"], branch = "clocks-fixes" }
+npcx490m-pac = { git = "https://github.com/pop-project/npcx490m-pac", features = ["rt", "critical-section"] }
+embassy-hal-internal = { git = "https://github.com/embassy-rs/embassy", features = ["cortex-m", "prio-bits-0"] }
+critical-section = "1.1"
+defmt = { version = "0.3", optional = true }
+embedded-hal = "1.0.0"
