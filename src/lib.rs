@@ -23,5 +23,7 @@ embassy_hal_internal::peripherals!(
 );
 
 pub fn init(config: Config) -> Peripherals {
+    cdcg::init_clocks(config.cdcg);
+
     Peripherals::take()
 }
