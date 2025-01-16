@@ -23,3 +23,4 @@ embassy-sync = { git = "https://github.com/embassy-rs/embassy" }
 critical-section = "1.1"
 defmt = { version = "0.3", optional = true }
 embedded-hal = "1.0.0"
+paste = "1.0"
