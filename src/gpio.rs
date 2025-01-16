@@ -639,6 +639,7 @@ macro_rules! impl_pin {
         impl Pin for crate::peripherals::$peripheral {}
 
         paste! {
+            #[doc = "Type alias to tie [`" $port "`](crate::pac::" $port ") pin " $pin " to ball [`" $peripheral "`](crate::peripherals::" $peripheral ")"]
             pub type [<$port $pin>] = crate::peripherals::$peripheral;
         }
     };
