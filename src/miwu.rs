@@ -36,8 +36,8 @@ impl WuiIndex {
     }
 
     pub const fn to_map(&self) -> WuiMap {
-        let (subgroup, r) = div_rem(self.0, SUBGROUP_COUNT as u8);
-        let (group, miwu_n) = div_rem(r, GROUP_COUNT as u8);
+        let (r, subgroup) = div_rem(self.0, SUBGROUP_COUNT as u8);
+        let (miwu_n, group) = div_rem(r, GROUP_COUNT as u8);
 
         WuiMap {
             miwu_n,
