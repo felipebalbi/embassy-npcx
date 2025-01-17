@@ -13,11 +13,8 @@ pub struct AwaitableInput<'d, T> {
     wui: WakeUp<'d>,
 }
 
-impl<'d, T> AwaitableInput<'d, T> {
-    pub fn new<PIN, WUI>(
-        pin: impl Peripheral<P = PIN> + 'd,
-        wui: impl Peripheral<P = WUI> + 'd,
-    ) -> AwaitableInput<'d, CanPullUp>
+impl<'d> AwaitableInput<'d, CanPullUp> {
+    pub fn new<PIN, WUI>(pin: impl Peripheral<P = PIN> + 'd, wui: impl Peripheral<P = WUI> + 'd) -> Self
     where
         PIN: InputPin + 'd,
         WUI: WakeUpInput + 'd,
@@ -28,11 +25,10 @@ impl<'d, T> AwaitableInput<'d, T> {
             wui: WakeUp::new(wui),
         }
     }
+}
 
-    pub fn new_lowvoltage<PIN, WUI>(
-        pin: impl Peripheral<P = PIN> + 'd,
-        wui: impl Peripheral<P = WUI> + 'd,
-    ) -> AwaitableInput<'d, PullDownOnly>
+impl<'d> AwaitableInput<'d, PullDownOnly> {
+    pub fn new_lowvoltage<PIN, WUI>(pin: impl Peripheral<P = PIN> + 'd, wui: impl Peripheral<P = WUI> + 'd) -> Self
     where
         PIN: LowVoltagePin + 'd,
         WUI: WakeUpInput + 'd,
