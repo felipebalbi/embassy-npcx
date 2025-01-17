@@ -1,4 +1,22 @@
-#![allow(private_interfaces)]
+//! Multi-Input Wake-Up (MIWU) control for exiting power states, and signal conditioning of external interrupt sources.
+//!
+//! # Realtime `RT` feature
+//! If the `rt` feature is enabled, provides an interface to `await` on an [WakeUpInput] using [WakeUp].
+//! Without this feature enabled, the [WakeUpInput] can still be enabled and checked whether it [is high](WakeUp::is_high)
+//! or [is pending](WakeUp::is_pending).
+//!
+//! The interrupts need to be unmasked in `NVIC` in order for this functionality to be used.
+//!
+//! ## Opinionated interrupt
+//! The interrupts implemented here will unset the `enable` bit, but leave the `pending` bit intact. It is the future
+//! that clears this `pending` bit when polled or dropped.
+//!
+//! This means that if the interrupt is run, all pending WakeUpInputs are disabled, and need to be re-enabled if used for
+//! exiting a low power state.
+//!
+//! # Use cases
+//! * View [AwaitableInput](crate::gpio_miwu::AwaitableInput) (if `rt` feature is enabled) to configure an pin interrupt.
+//! * These WakeUpInputs can be consumed by the HAL implementation for specific peripherals unrelated to GPIO pins.
 
 use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
 use paste::paste;
@@ -8,7 +26,7 @@ const SUBGROUP_COUNT: usize = 8;
 const GROUP_COUNT: usize = 8;
 const WUI_COUNT: usize = MIWU_COUNT * GROUP_COUNT * SUBGROUP_COUNT;
 
-/// Index used to access array elements or to store AnyWakeUpInput compactly.
+/// Index used to access array elements (used for AtomicWakers) or to store AnyWakeUpInput compactly.
 #[derive(Clone, Copy)]
 struct WuiIndex(u8);
 
@@ -32,12 +50,18 @@ const fn div_rem(x: u8, y: u8) -> (u8, u8) {
 
 impl WuiIndex {
     pub const fn new(map: WuiMap) -> Self {
-        Self(map.miwu_n * SUBGROUP_COUNT as u8 * GROUP_COUNT as u8 + map.group * SUBGROUP_COUNT as u8 + map.subgroup)
+        let i = map.miwu_n * SUBGROUP_COUNT as u8 * GROUP_COUNT as u8 + map.group * SUBGROUP_COUNT as u8 + map.subgroup;
+
+        assert!(i < WUI_COUNT as u8);
+
+        Self(i)
     }
 
-    pub const fn to_map(&self) -> WuiMap {
+    pub const fn to_map(self) -> WuiMap {
         let (r, subgroup) = div_rem(self.0, SUBGROUP_COUNT as u8);
         let (miwu_n, group) = div_rem(r, GROUP_COUNT as u8);
+
+        assert!(miwu_n < MIWU_COUNT as u8);
 
         WuiMap {
             miwu_n,
@@ -61,35 +85,54 @@ const fn get_miwu(n: usize) -> &'static crate::pac::miwu0::RegisterBlock {
     unsafe { &*ptr }
 }
 
+/// Signal level used as signalling condition.
 pub enum Level {
     Low,
     High,
 }
 
+/// Signal edge used as signalling condition.
 pub enum Edge {
     Any,
     Falling,
     Rising,
 }
 
+/// Signalling condition on which the [WakeUp] input is triggered.
 pub enum Mode {
     Level(Level),
     Edge(Edge),
 }
 
+impl From<Level> for Mode {
+    fn from(value: Level) -> Self {
+        Mode::Level(value)
+    }
+}
+
+impl From<Edge> for Mode {
+    fn from(value: Edge) -> Self {
+        Mode::Edge(value)
+    }
+}
+
 mod sealed {
     pub trait SealedWakeUpInput {
+        #![allow(private_interfaces)]
         fn as_map(&self) -> super::WuiMap;
     }
 }
 
+/// WakeUpInput (WUI) trait.
 pub trait WakeUpInput: sealed::SealedWakeUpInput {}
 
+/// WakeUpInput (WUI) driver.
 pub struct WakeUp<'d> {
     wui: PeripheralRef<'d, AnyWakeUpInput>,
 }
 
 impl<'d> WakeUp<'d> {
+    /// Construct the WakeUp driver without enabling the signalling condition.
     pub fn new(wui: impl Peripheral<P = impl WakeUpInput + 'd> + 'd) -> Self {
         into_ref!(wui);
         Self { wui: wui.map_into() }
@@ -99,14 +142,15 @@ impl<'d> WakeUp<'d> {
         self.wui.0.to_map()
     }
 
-    fn enable(&mut self, mode: Mode) {
+    /// Enable the [WakeUpInput] with a specific signalling condition [Mode], enabling triggering the WakeUp signal and/or interrupt.
+    pub fn enable(&mut self, mode: impl Into<Mode>) {
         let map = self.as_map();
         let port = map.port();
         let group = map.group as usize;
 
         use crate::pac::miwu0::*;
         let (wkmod, wkaedgn, wkedgn);
-        match mode {
+        match mode.into() {
             Mode::Level(level) => {
                 wkmod = wkmodn::InputMode::Level;
                 wkaedgn = None;
@@ -145,7 +189,8 @@ impl<'d> WakeUp<'d> {
         });
     }
 
-    fn disable(&mut self) {
+    /// Disable the [WakeUpInput], forbidding the WakeUp signal and/or interrupt.
+    pub fn disable(&mut self) {
         let map = self.as_map();
         // Note(cs): WakeUpInputs can share MIWU and group, which use the same registers.
         critical_section::with(|_cs| {
@@ -155,7 +200,7 @@ impl<'d> WakeUp<'d> {
         });
     }
 
-    fn clear_pending(&mut self) {
+    pub fn clear_pending(&mut self) {
         let map = self.as_map();
         // Note(no-cs): atomic write to clear a single bit, safe.
         map.port()
@@ -163,6 +208,7 @@ impl<'d> WakeUp<'d> {
             .write(|w| w.input(map.subgroup).clear());
     }
 
+    /// Indicates whether the input signal, regardless of signalling condition, is high or not.
     pub fn is_high(&self) -> bool {
         let map = self.as_map();
         map.port()
@@ -172,6 +218,7 @@ impl<'d> WakeUp<'d> {
             .is_high()
     }
 
+    /// Indicates whether the input signalling condition set in [Mode] (example: rising edge) has been triggered.
     pub fn is_pending(&self) -> bool {
         let map = self.as_map();
         map.port()
@@ -182,20 +229,21 @@ impl<'d> WakeUp<'d> {
     }
 }
 
-impl<'d> Drop for WakeUp<'d> {
+/// Disables the [WakeUpInput] signalling condition when dropped.
+impl Drop for WakeUp<'_> {
     fn drop(&mut self) {
         self.disable();
     }
 }
 
-pub struct AnyWakeUpInput(WuiIndex);
+struct AnyWakeUpInput(WuiIndex);
 
 // Allow use of PeripheralRef to do lifetime management
 impl Peripheral for AnyWakeUpInput {
     type P = AnyWakeUpInput;
 
     unsafe fn clone_unchecked(&self) -> Self::P {
-        AnyWakeUpInput(self.0.clone())
+        AnyWakeUpInput(self.0)
     }
 }
 
@@ -208,6 +256,7 @@ impl<T: WakeUpInput> From<T> for AnyWakeUpInput {
 macro_rules! impl_wake_up_input {
     ($peripheral:ty, $miwu_n:expr, $group:expr, $subgroup:expr, $interrupt:ident) => {
         impl sealed::SealedWakeUpInput for $peripheral {
+            #![allow(private_interfaces)]
             fn as_map(&self) -> self::WuiMap {
                 self::WuiMap {
                     miwu_n: $miwu_n,
@@ -221,7 +270,8 @@ macro_rules! impl_wake_up_input {
 }
 
 #[cfg(feature = "rt")]
-pub mod rt {
+/// Interrupt handling for MIWU, enabling to `await` on [WakeUp] signalling conditions.
+mod rt {
     use super::*;
     use crate::pac::interrupt;
     use core::{
@@ -239,17 +289,20 @@ pub mod rt {
     }
 
     impl<'d> WakeUp<'d> {
-        pub async fn wait_for(&mut self, mode: Mode) {
+        /// Configures a specific signalling condition [Mode] and awaits for it to be signalled.
+        pub async fn wait_for(&mut self, mode: impl Into<Mode>) {
             self.enable(mode);
             WakeUpInputFuture::<'_, 'd> { channel: self }.await
         }
 
+        /// Configures the [Level::High] signalling condition and awaits for it to be signalled.
         pub async fn wait_for_high(&mut self) {
-            self.wait_for(Mode::Level(Level::High)).await
+            self.wait_for(Level::High).await
         }
 
+        /// Configures the [Level::Low] signalling condition and awaits for it to be signalled.
         pub async fn wait_for_low(&mut self) {
-            self.wait_for(Mode::Level(Level::Low)).await
+            self.wait_for(Level::Low).await
         }
 
         fn waker(&self) -> &'static AtomicWaker {
@@ -261,7 +314,7 @@ pub mod rt {
         channel: &'a mut WakeUp<'d>,
     }
 
-    impl<'a, 'd> Drop for WakeUpInputFuture<'a, 'd> {
+    impl Drop for WakeUpInputFuture<'_, '_> {
         fn drop(&mut self) {
             // Clean up, and do not assume that the interrupt has run.
             self.channel.disable();
@@ -269,7 +322,7 @@ pub mod rt {
         }
     }
 
-    impl<'a, 'd> Future for WakeUpInputFuture<'a, 'd> {
+    impl Future for WakeUpInputFuture<'_, '_> {
         type Output = ();
 
         fn poll(self: core::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {

@@ -1,13 +1,20 @@
+//! Awaitable GPIO input pins.
+
 use core::convert::Infallible;
 use core::ops::{Deref, DerefMut};
 
 use embassy_hal_internal::Peripheral;
 
 use crate::gpio::{CanPullUp, Input, InputPin, LowVoltagePin, PullDownOnly};
-use crate::miwu::{WakeUp, WakeUpInput};
+use crate::miwu::{Edge, Level, WakeUp, WakeUpInput};
 
+/// GPIO pins that have an WakeUpInput channel associated with them.
 pub trait AwaitableInputPin {}
 
+/// Driver for GPIO input pins and their WakeUpInput channel.
+///
+/// Dereferences to the underlying [Input] driver instance,
+/// but also implements [embedded_hal_async::digital::Wait].
 pub struct AwaitableInput<'d, T> {
     pin: Input<'d, T>,
     wui: WakeUp<'d>,
@@ -49,41 +56,46 @@ impl<'d, T> Deref for AwaitableInput<'d, T> {
     }
 }
 
-impl<'d, T> DerefMut for AwaitableInput<'d, T> {
+impl<T> DerefMut for AwaitableInput<'_, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.pin
     }
 }
 
-impl<'d, T> embedded_hal::digital::ErrorType for AwaitableInput<'d, T> {
+impl<T> embedded_hal::digital::ErrorType for AwaitableInput<'_, T> {
     type Error = Infallible;
 }
 
-impl<'d, T> embedded_hal_async::digital::Wait for AwaitableInput<'d, T> {
+impl<T> embedded_hal_async::digital::Wait for AwaitableInput<'_, T> {
     async fn wait_for_high(&mut self) -> Result<(), Self::Error> {
-        Ok(self.wui.wait_for_high().await)
+        if self.is_high() {
+            return Ok(());
+        }
+        self.wui.wait_for(Level::High).await;
+        Ok(())
     }
 
     async fn wait_for_low(&mut self) -> Result<(), Self::Error> {
-        Ok(self.wui.wait_for_low().await)
+        if self.is_low() {
+            return Ok(());
+        }
+        self.wui.wait_for(Level::Low).await;
+        Ok(())
     }
 
     async fn wait_for_rising_edge(&mut self) -> Result<(), Self::Error> {
-        Ok(self
-            .wui
-            .wait_for(crate::miwu::Mode::Edge(crate::miwu::Edge::Rising))
-            .await)
+        self.wui.wait_for(Edge::Rising).await;
+        Ok(())
     }
 
     async fn wait_for_falling_edge(&mut self) -> Result<(), Self::Error> {
-        Ok(self
-            .wui
-            .wait_for(crate::miwu::Mode::Edge(crate::miwu::Edge::Falling))
-            .await)
+        self.wui.wait_for(Edge::Falling).await;
+        Ok(())
     }
 
     async fn wait_for_any_edge(&mut self) -> Result<(), Self::Error> {
-        Ok(self.wui.wait_for(crate::miwu::Mode::Edge(crate::miwu::Edge::Any)).await)
+        self.wui.wait_for(Edge::Any).await;
+        Ok(())
     }
 }
 
