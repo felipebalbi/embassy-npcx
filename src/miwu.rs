@@ -272,13 +272,13 @@ macro_rules! impl_wake_up_input {
 #[cfg(feature = "rt")]
 /// Interrupt handling for MIWU, enabling to `await` on [WakeUp] signalling conditions.
 mod rt {
+    use core::future::Future;
+    use core::task::{Context, Poll};
+
+    use embassy_sync::waitqueue::AtomicWaker;
+
     use super::*;
     use crate::pac::interrupt;
-    use core::{
-        future::Future,
-        task::{Context, Poll},
-    };
-    use embassy_sync::waitqueue::AtomicWaker;
 
     // Note: having 192 wakers costs quite a bit of RAM.
     // If desired, change to or add intrusive linked list waker to save RAM.
