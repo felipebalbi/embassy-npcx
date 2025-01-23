@@ -1,8 +1,7 @@
 use core::future::Future;
 
-use defmt::info;
 use embassy_sync::waitqueue::AtomicWaker;
-pub use embedded_hal_async::i2c::{Operation, I2c};
+pub use embedded_hal_async::i2c::{I2c, Operation};
 
 use crate::pac::{self, interrupt, Interrupt, NVIC};
 
@@ -52,8 +51,13 @@ struct ReadCompletion<'a> {
 
 impl ReadCompletion<'_> {
     fn complete(self) {
-        for b in self.group {
-            *b = self.regs.smbn_sda().read().bits();
+        if self.group.is_empty() {
+            self.regs.smbn_st().write(|w| w.stastr().set_bit());
+            self.regs.smbn_ctl1().modify(|_, w| w.stastre().clear_bit());
+        } else {
+            for b in self.group {
+                *b = self.regs.smbn_sda().read().bits();
+            }
         }
     }
 }
@@ -66,15 +70,23 @@ pub enum Speed {
 
 #[derive(Debug)]
 pub enum Error {
+    LostArbitration,
     BusError,
-    NegativeAck,
+    NegativeAckAddress,
+    NegativeAckData,
 }
 
 impl embedded_hal_async::i2c::Error for Error {
     fn kind(&self) -> embedded_hal::i2c::ErrorKind {
         match self {
+            Error::LostArbitration => embedded_hal::i2c::ErrorKind::ArbitrationLoss,
             Error::BusError => embedded_hal::i2c::ErrorKind::Bus,
-            Error::NegativeAck => embedded_hal::i2c::ErrorKind::NoAcknowledge(embedded_hal::i2c::NoAcknowledgeSource::Unknown),
+            Error::NegativeAckData => {
+                embedded_hal::i2c::ErrorKind::NoAcknowledge(embedded_hal::i2c::NoAcknowledgeSource::Data)
+            }
+            Error::NegativeAckAddress => {
+                embedded_hal::i2c::ErrorKind::NoAcknowledge(embedded_hal::i2c::NoAcknowledgeSource::Address)
+            }
         }
     }
 }
@@ -83,6 +95,14 @@ pub struct I2CController {
     regs: &'static pac::smb0::RegisterBlock,
     waker: &'static AtomicWaker,
 }
+
+trait IteratorExt: ExactSizeIterator + Sized {
+    fn mark_last(mut self) -> impl Iterator<Item = (Self::Item, bool)> {
+        core::iter::from_fn(move || self.next().map(|v| (v, self.len() == 0)))
+    }
+}
+
+impl<T: ExactSizeIterator + Sized> IteratorExt for T {}
 
 impl I2CController {
     fn wait_for<O, F: Fn() -> Option<O>>(&mut self, f: F) -> impl Future<Output = O> {
@@ -160,10 +180,18 @@ impl I2CController {
     }
 
     pub fn new_smb5() -> Self {
-        unsafe {crate::pac::Sysconfig::steal() }.devcnt().modify(|_, w| unsafe {w.hif_typ_sel().bits(1)});
-        unsafe {crate::pac::Sysglue::steal() }.smb_sel().modify(|_, w| w.smb5_sl().set_bit());
-        unsafe {crate::pac::Miwu2::steal() }.wkpcln7().write(|w| w.input0().set_bit());
-        unsafe {crate::pac::Sysconfig::steal() }.devalt6().modify(|_, w| w.i2c5_1_sl().set_bit());
+        unsafe { crate::pac::Sysconfig::steal() }
+            .devcnt()
+            .modify(|_, w| unsafe { w.hif_typ_sel().bits(1) });
+        unsafe { crate::pac::Sysglue::steal() }
+            .smb_sel()
+            .modify(|_, w| w.smb5_sl().set_bit());
+        unsafe { crate::pac::Miwu2::steal() }
+            .wkpcln7()
+            .write(|w| w.input0().set_bit());
+        unsafe { crate::pac::Sysconfig::steal() }
+            .devalt6()
+            .modify(|_, w| w.i2c5_1_sl().set_bit());
 
         let res = Self::new(unsafe { &*crate::pac::Smb5::PTR }, &WAKER);
 
@@ -173,41 +201,24 @@ impl I2CController {
     }
 
     fn handle_ber<T>(&mut self) -> Result<T, Error> {
-        // TODO: Implement more robust recovery
+        // This should be enough for arbitration errors. However, the documentation is somewhat unclear on more
+        // serious problems.
         self.regs.smbn_fif_cts().write(|w| w.clr_fifo().set_bit());
         self.regs.smbn_st().write(|w| w.ber().set_bit());
 
         Err(Error::BusError)
     }
 
-    fn handle_negack(&mut self) -> Result<(), Error> {
+    fn handle_negack(&mut self) {
         self.regs.smbn_fif_cts().write(|w| w.clr_fifo().set_bit());
         self.regs.smbn_ctl1().modify(|_, w| w.stop().set_bit());
         self.regs.smbn_st().write(|w| w.negack().set_bit());
-
-        Err(Error::NegativeAck)
     }
 
-    async fn do_write_with_addr(&mut self, address: u8, data: &[u8], complete_prev: impl '_ + FnOnce() -> ()) -> Result<(), Error> {
-        info!("Writing {} bytes to {:02x}", data.len(), address);
-        
-        // Send (repeated) start
-        self.regs.smbn_ctl1().modify(|_, w| w.start().set_bit());
-
-        // Complete previous
-        complete_prev();
-
-        //
-        self.regs.smbn_sda().write(|w| unsafe { w.bits(address << 1) });
-
-        // Do bulk write
-        self.do_write_no_addr(data).await
-    }
-
-    async fn do_write_no_addr(&mut self, data: &[u8]) -> Result<(), Error> {
-        // Set up transmission of first 31 bytes
+    async fn bulk_write(&mut self, data: &[u8]) -> Result<(), Error> {
+        // Set up transmission of first 32 bytes
         let mut data = data.iter().copied();
-        for b in (&mut data).take((FIFO_SIZE - 1).into()) {
+        for b in (&mut data).take((FIFO_SIZE).into()) {
             self.regs.smbn_sda().write(|w| unsafe { w.bits(b) });
         }
 
@@ -235,51 +246,40 @@ impl I2CController {
                 return self.handle_ber();
             }
             if r.negack().bit_is_set() {
-                return self.handle_negack();
+                self.handle_negack();
+                return Err(Error::NegativeAckData);
             }
 
             // Add new data
             for b in (&mut data).take(GROUP_SIZE.into()) {
                 self.regs.smbn_sda().write(|w| unsafe { w.bits(b) });
             }
+
+            // Reset threshold trigger
+            self.regs.smbn_txf_sts().write(|w| w.tx_thst().set_bit());
         }
 
         Ok(())
     }
 
-    async fn do_read_with_addr<'a>(&mut self, address: u8, data: &'a mut [u8], complete_prev: impl '_ + FnOnce() -> ()) -> Result<ReadCompletion<'a>, Error> {
-        info!("Reading {} bytes from {:02x}", data.len(), address);
-        // Send (repeated) start
-        self.regs.smbn_ctl1().modify(|_, w| w.start().set_bit());
-
-        // Complete previous
-        complete_prev();
-
-        // Do bulk transfer
-        let regs = self.regs;
-        self.bulk_read(data, move || {
-            regs.smbn_sda().write(|w| unsafe { w.bits((address << 1) | 1) });
-        }).await
-    }
-
-    async fn do_read_no_addr<'a>(&mut self, data: &'a mut [u8], complete_prev: impl '_ + FnOnce() -> ()) -> Result<ReadCompletion<'a>, Error> {
-        // Do bulk transfer
-        self.bulk_read(data, move || {
-            complete_prev();
-        }).await
-    }
-
-    async fn bulk_read<'a>(&mut self, mut data: &'a mut [u8], start: impl '_ + FnOnce() -> ()) -> Result<ReadCompletion<'a>, Error> {
+    // Should not be called with zero-length data
+    async fn bulk_read<'a>(
+        &mut self,
+        mut data: &'a mut [u8],
+        negack_last: bool,
+        start: impl '_ + FnOnce(),
+    ) -> Result<ReadCompletion<'a>, Error> {
+        debug_assert_ne!(data.len(), 0);
         let mut group;
 
         // Setup transfer
         if data.len() <= FIFO_SIZE.into() {
             group = data;
             data = &mut [];
-            // Add nack at end
+            // Add nack at end if required
             self.regs.smbn_rxf_ctl().write(|w| unsafe {
                 w.last_pec()
-                    .set_bit()
+                    .bit(negack_last)
                     .thr_rxie()
                     .clear_bit()
                     .rx_thr()
@@ -302,7 +302,7 @@ impl I2CController {
         start();
 
         // Do bulk
-        while data.len() > 0 {
+        while !data.is_empty() {
             self.wait_read().await?;
 
             let next_group;
@@ -313,7 +313,7 @@ impl I2CController {
                 // Add nack at end
                 self.regs.smbn_rxf_ctl().write(|w| unsafe {
                     w.last_pec()
-                        .set_bit()
+                        .bit(negack_last)
                         .thr_rxie()
                         .clear_bit()
                         .rx_thr()
@@ -345,65 +345,180 @@ impl I2CController {
         self.wait_read().await?;
 
         // Return completion
-        Ok(ReadCompletion {
-            regs: self.regs,
-            group,
-        })
+        Ok(ReadCompletion { regs: self.regs, group })
+    }
+
+    pub async fn transaction(&mut self, address: u8, operations: &mut [Operation<'_>]) -> Result<(), Error> {
+        enum PrevOpType<'a> {
+            None,
+            Read(ReadCompletion<'a>),
+            Write,
+        }
+
+        let mut prevop = PrevOpType::None;
+
+        for (op, last) in operations.iter_mut().mark_last() {
+            match op {
+                Operation::Write(data) => {
+                    if !matches!(prevop, PrevOpType::Write) {
+                        // Handle (repeated) start and address bytes
+                        self.regs.smbn_ctl1().modify(|_, w| w.start().set_bit());
+                        if let PrevOpType::Read(completion) = prevop {
+                            completion.complete();
+                        }
+
+                        // Wait for completion
+                        let r = self
+                            .wait_for(|| {
+                                let r = self.regs.smbn_st().read();
+                                if r.ber().bit_is_set() || r.sdast().bit_is_set() {
+                                    Some(r)
+                                } else {
+                                    None
+                                }
+                            })
+                            .await;
+                        if r.ber().bit_is_set() {
+                            let _ = self.handle_ber::<()>();
+                            return Err(Error::LostArbitration);
+                        }
+
+                        self.regs.smbn_sda().write(|w| unsafe { w.bits(address << 1) });
+
+                        // Wait for completion
+                        let r = self
+                            .wait_for(|| {
+                                let r = self.regs.smbn_st().read();
+                                if r.ber().bit_is_set() || r.negack().bit_is_set() || r.sdast().bit_is_set() {
+                                    Some(r)
+                                } else {
+                                    None
+                                }
+                            })
+                            .await;
+                        if r.ber().bit_is_set() {
+                            let _ = self.handle_ber::<()>();
+                            return Err(Error::LostArbitration);
+                        }
+                        if r.negack().bit_is_set() {
+                            self.handle_negack();
+                            return Err(Error::NegativeAckAddress);
+                        }
+                    }
+
+                    self.bulk_write(data).await?;
+
+                    prevop = PrevOpType::Write;
+                }
+                Operation::Read(data) => {
+                    if data.is_empty() && matches!(prevop, PrevOpType::Read(_)) {
+                        // Ignore chained zero sized reads
+                    } else if let PrevOpType::Read(completion) = prevop {
+                        prevop = PrevOpType::Read(self.bulk_read(data, last, || completion.complete()).await?);
+                    } else {
+                        // Send start and address
+                        self.regs
+                            .smbn_ctl1()
+                            .modify(|_, w| w.stastre().set_bit().start().set_bit());
+                        // Wait for completion
+                        let r = self
+                            .wait_for(|| {
+                                let r = self.regs.smbn_st().read();
+                                if r.ber().bit_is_set() || r.sdast().bit_is_set() {
+                                    Some(r)
+                                } else {
+                                    None
+                                }
+                            })
+                            .await;
+                        if r.ber().bit_is_set() {
+                            let _ = self.handle_ber::<()>();
+                            return Err(Error::LostArbitration);
+                        }
+
+                        self.regs.smbn_sda().write(|w| unsafe { w.bits((address << 1) | 1) });
+
+                        // Wait for completion
+                        let r = self
+                            .wait_for(|| {
+                                let r = self.regs.smbn_st().read();
+                                if r.ber().bit_is_set()
+                                    || r.negack().bit_is_set()
+                                    || r.sdast().bit_is_set()
+                                    || r.stastr().bit_is_set()
+                                {
+                                    Some(r)
+                                } else {
+                                    None
+                                }
+                            })
+                            .await;
+                        if r.ber().bit_is_set() {
+                            let _ = self.handle_ber::<()>();
+                            return Err(Error::LostArbitration);
+                        }
+                        if r.negack().bit_is_set() {
+                            self.handle_negack();
+                            return Err(Error::NegativeAckAddress);
+                        }
+
+                        if data.is_empty() {
+                            // This causes proper completion of the zero sized read on the next operation.
+                            // See also the implementation of readcompletion.
+                            prevop = PrevOpType::Read(ReadCompletion {
+                                regs: self.regs,
+                                group: &mut [],
+                            });
+                        } else {
+                            let regs = self.regs;
+                            prevop = PrevOpType::Read(
+                                self.bulk_read(data, last, || {
+                                    regs.smbn_st().write(|w| w.stastr().set_bit());
+                                    regs.smbn_ctl1().modify(|_, w| w.stastre().clear_bit());
+                                })
+                                .await?,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // Generate stop bit and complete final read if any
+        self.regs.smbn_ctl1().modify(|_, w| w.stop().set_bit());
+
+        if let PrevOpType::Read(completion) = prevop {
+            completion.complete();
+        }
+
+        // And reset fifos
+        self.regs.smbn_fif_cts().write(|w| w.clr_fifo().set_bit());
+
+        Ok(())
+    }
+
+    // Functions below ensure you don't need the embedded_hal_async trait
+
+    pub async fn read(&mut self, address: u8, read: &mut [u8]) -> Result<(), Error> {
+        self.transaction(address, &mut [Operation::Read(read)]).await
+    }
+
+    pub async fn write(&mut self, address: u8, write: &[u8]) -> Result<(), Error> {
+        self.transaction(address, &mut [Operation::Write(write)]).await
+    }
+
+    pub async fn write_read(&mut self, address: u8, write: &[u8], read: &mut [u8]) -> Result<(), Error> {
+        self.transaction(address, &mut [Operation::Write(write), Operation::Read(read)])
+            .await
     }
 }
 
-impl embedded_hal_async::i2c::ErrorType  for I2CController {
+impl embedded_hal_async::i2c::ErrorType for I2CController {
     type Error = Error;
 }
 
-fn option_as_fnonce(o: Option<ReadCompletion<'_>>) -> impl '_ + FnOnce() -> () {
-    move || {
-        match o {
-            Some(f) => f.complete(),
-            None => {}
-        }
-    }
-}
-
-enum PrevOpType {
-    None,
-    Read,
-    Write,
-}
-
 impl I2c for I2CController {
-    async fn transaction(
-        &mut self,
-        address: u8,
-        operations: &mut [embedded_hal::i2c::Operation<'_>],
-    ) -> Result<(), Self::Error> {
-        let mut completion = None;
-        let mut prev_op = PrevOpType::None;
-
-        for op in operations {
-            match (op, &prev_op) {
-                (embedded_hal::i2c::Operation::Read(data), PrevOpType::Read) => {
-                    completion = Some(self.do_read_no_addr(*data, option_as_fnonce(completion)).await?);
-                    prev_op = PrevOpType::Read;
-                },
-                (embedded_hal::i2c::Operation::Read(data), _) => {
-                    completion = Some(self.do_read_with_addr(address, *data, option_as_fnonce(completion)).await?);
-                    prev_op = PrevOpType::Read;
-                },
-                (embedded_hal::i2c::Operation::Write(data), PrevOpType::Write) => {
-                    self.do_write_no_addr(*data).await?;
-                    completion = None;
-                    prev_op = PrevOpType::Write;
-                },
-                (embedded_hal::i2c::Operation::Write(data), _) => {
-                    self.do_write_with_addr(address, *data, option_as_fnonce(completion)).await?;
-                    completion = None;
-                    prev_op = PrevOpType::Write;
-                },
-            }
-        }
-        self.regs.smbn_ctl1().modify(|_, w| w.stop().set_bit());
-        option_as_fnonce(completion)();
-        Ok(())
+    async fn transaction(&mut self, address: u8, operations: &mut [Operation<'_>]) -> Result<(), Self::Error> {
+        (*self).transaction(address, operations).await
     }
 }
