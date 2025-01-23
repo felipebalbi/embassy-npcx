@@ -44,10 +44,86 @@ embassy_hal_internal::peripherals!(
     MIWU2_81, MIWU2_82, MIWU2_83, MIWU2_84, MIWU2_85, MIWU2_86, MIWU2_87
 );
 
-pub fn init(config: Config) -> Peripherals {
+#[macro_export]
+macro_rules! bind_interrupts {
+    ($vis:vis struct $name:ident {
+        $(
+            $(#[cfg($cond_irq:meta)])?
+            $irq:ident => $(
+                $(#[cfg($cond_handler:meta)])?
+                $handler:ty
+            ),*;
+        )*
+    }) => {
+        #[derive(Copy, Clone)]
+        $vis struct $name;
+
+        $(
+            #[allow(non_snake_case)]
+            #[no_mangle]
+            $(#[cfg($cond_irq)])?
+            unsafe extern "C" fn $irq() {
+                $(
+                    $(#[cfg($cond_handler)])?
+                    <$handler as $crate::interrupt::typelevel::Handler<$crate::interrupt::typelevel::$irq>>::on_interrupt();
+
+                )*
+            }
+
+            $(#[cfg($cond_irq)])?
+            $crate::bind_interrupts!(@inner
+                $(
+                    $(#[cfg($cond_handler)])?
+                    unsafe impl $crate::interrupt::typelevel::Binding<$crate::interrupt::typelevel::$irq, $handler> for $name {}
+                )*
+            );
+        )*
+    };
+    (@inner $($t:tt)*) => {
+        $($t)*
+    }
+}
+
+/// Marker struct for LPC mode
+// marked non-exhaustive to ensure the user can't create one from nothing
+#[non_exhaustive]
+#[derive(Debug, Copy, Clone)]
+pub struct Lpc {}
+
+/// Marker struct for ESpi mode
+// marked non-exhaustive to ensure the user can't create one from nothing
+#[non_exhaustive]
+#[derive(Debug, Copy, Clone)]
+pub struct ESpi {}
+
+fn init(config: Config) -> Peripherals {
     cdcg::init_clocks(config.cdcg);
 
     Peripherals::take()
+}
+
+pub fn init_lpc(config: Config) -> (Peripherals, Lpc) {
+    let per = init(config);
+
+    // We still have control over all peripherals, so this is safe to do outside a critical section
+    unsafe { crate::pac::Sysconfig::steal() }.devcnt().modify(|r, w| {
+        assert!(r.hif_typ_sel().bits() == 0 || r.hif_typ_sel().bits() == 1);
+        unsafe { w.hif_typ_sel().bits(1) }
+    });
+
+    (per, Lpc {})
+}
+
+pub fn init_espi(config: Config) -> (Peripherals, ESpi) {
+    let per = init(config);
+
+    // We still have control over all peripherals, so this is safe to do outside a critical section
+    unsafe { crate::pac::Sysconfig::steal() }.devcnt().modify(|r, w| {
+        assert!(r.hif_typ_sel().bits() == 0 || r.hif_typ_sel().bits() == 2);
+        unsafe { w.hif_typ_sel().bits(2) }
+    });
+
+    (per, ESpi {})
 }
 
 #[cfg(feature = "rt")]
