@@ -8,7 +8,7 @@ pub use npcx490m_pac as pac;
 #[non_exhaustive]
 #[derive(Debug, Clone, Default)]
 pub struct Config {
-    cdcg: cdcg::Config,
+    pub cdcg: cdcg::Config,
 }
 
 embassy_hal_internal::peripherals!(

@@ -33,10 +33,6 @@ pub struct Config {
     ///
     /// Range: 1..
     pub mult_m: u16,
-    /// Second multiplier of the LFCLK to form the VOSCCLK
-    ///
-    /// Range: 1..64
-    pub mult_n: u8,
     /// Decides how the VOSC clock is used after the multipliers to form the MCLK and FMCLK
     pub vosc_mode: VoscClockMode,
     /// The prescaler for the MCLK that turns it into the CLK
@@ -72,7 +68,6 @@ impl Default for Config {
         Self {
             lf_clock_source: LfClockSource::FreeRunningClock,
             mult_m: 0x0ABA,
-            mult_n: 0x02,
             vosc_mode: VoscClockMode::Normal,
             core_clock_prescaler: MclkDivider::Div2,
 
@@ -109,21 +104,7 @@ pub(crate) fn init_clocks(config: Config) {
         shm.shm_ctl().modify(|_, w| w.stall_host().set_bit());
     }
 
-    // Calculate the clock up to the MCLK
-    assert!(
-        (0..64).contains(&config.mult_n),
-        "The n multiplier must be in range of 0..64"
-    );
-
-    let voscclock = LFCLK * config.mult_m as u32 * config.mult_n as u32;
-
-    if voscclock > 60_000_000 {
-        assert_ne!(
-            config.vosc_mode,
-            VoscClockMode::Normal,
-            "Above 60MHz the clock, the normal mode is unavailable"
-        );
-    }
+    let voscclock = LFCLK * config.mult_m as u32;
 
     // Select the best SIO clock
     // TODO: When voscclock is not exactly one of these options, it will lead to increased error in serial port baud rate.
@@ -156,7 +137,7 @@ pub(crate) fn init_clocks(config: Config) {
     let ahb6_clock_div3_used = ahb6_dividers.iter().flatten().any(|&div| div == AhbDivider::Div3);
 
     assert!(
-        ahb6_clock_div2_used != ahb6_clock_div3_used,
+        ahb6_dividers.iter().all(Option::is_none) || ahb6_clock_div2_used != ahb6_clock_div3_used,
         "The ahb6_divider, fiu0_divider & fiu1_divider cannot use div 2 and div 3 divisions at the same time"
     );
 
@@ -197,12 +178,61 @@ pub(crate) fn init_clocks(config: Config) {
         config.apb4_divider,
     ];
     for apb_divider in apb_dividers {
-        assert!(apb_divider.div_value() % config.core_clock_prescaler.div_value() == 0);
+        assert!(
+            apb_divider.div_value() % config.core_clock_prescaler.div_value() == 0,
+            "APB divider must be a multiple of the `core_clock_prescaler`"
+        );
     }
 
-    // TODO: Continue checks/asserts from page bottom of 588 (below table)
+    let max_apb_clocks = if mclk > 60_000_000 {
+        [
+            (mclk / 2).min(60_000_000),
+            (mclk / 2).min(60_000_000),
+            (mclk / 2).min(60_000_000),
+            mclk.min(120_000_000),
+        ]
+    } else {
+        [mclk; 4]
+    };
+    let min_apb_clocks = [4_000_000, 8_000_000, 12_500_000, 8_000_000];
 
-    // TODO: When changing prescalers, make sure APB is never higher than CLK, so we need to play with the order
+    for (i, ((apb_clk, max), min)) in [apb1_clk, apb2_clk, apb3_clk, apb4_clk]
+        .into_iter()
+        .zip(max_apb_clocks)
+        .zip(min_apb_clocks)
+        .enumerate()
+    {
+        assert!(
+            (min..=max).contains(&apb_clk),
+            "APB{} clock is {apb_clk} hz, but must be in range: {min}..={max}",
+            i + 1
+        );
+    }
+
+    // When changing prescalers we need to make sure APB is never higher than CLK, so we first slow them down and then possibly speed them back up
+    let current_apb1_divider = hfcg.hfcbcd1().read().apb1div().bits();
+    let current_apb2_divider = hfcg.hfcbcd1().read().apb2div().bits();
+    let current_apb3_divider = hfcg.hfcbcd2().read().apb3div().bits();
+    let current_apb4_divider = hfcg.hfcbcd2().read().apb4div().bits();
+    let current_core_clock_prescaler = hfcg.hfcgp().read().fpred().bits();
+    let min_apb_divider = current_core_clock_prescaler.max(config.core_clock_prescaler as u8);
+
+    if current_apb1_divider < min_apb_divider {
+        hfcg.hfcbcd1()
+            .modify(|_, w| unsafe { w.apb1div().bits(min_apb_divider) });
+    }
+    if current_apb2_divider < min_apb_divider {
+        hfcg.hfcbcd1()
+            .modify(|_, w| unsafe { w.apb2div().bits(min_apb_divider) });
+    }
+    if current_apb3_divider < min_apb_divider {
+        hfcg.hfcbcd2()
+            .modify(|_, w| unsafe { w.apb3div().bits(min_apb_divider) });
+    }
+    if current_apb4_divider < min_apb_divider {
+        hfcg.hfcbcd2()
+            .modify(|_, w| unsafe { w.apb4div().bits(min_apb_divider) });
+    }
 
     // Set the core clock prescaler all bus dividers
     hfcg.hfcgp().write(|w| unsafe {
@@ -239,7 +269,7 @@ pub(crate) fn init_clocks(config: Config) {
 
     // Set the high frequency values
     hfcg.hfcgn().write(|w| {
-        unsafe { w.hfcgn5_0().bits(config.mult_n) }
+        unsafe { w.hfcgn5_0().bits(2) }
             ._40m_en()
             .bit(matches!(config.vosc_mode, VoscClockMode::Mhz40))
             .xf_range()
