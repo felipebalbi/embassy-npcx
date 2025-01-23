@@ -5,6 +5,7 @@ use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
 use embassy_sync::waitqueue::AtomicWaker;
 pub use embedded_hal_async::i2c::{I2c, Operation};
 
+use crate::gpio::Pin;
 use crate::interrupt::typelevel::Interrupt;
 
 // Size of the peripherals fifo
@@ -65,13 +66,23 @@ impl ReadCompletion<'_> {
     }
 }
 
+#[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Speed {
+    #[default]
     Slow,
     Fast,
     FastPlus,
 }
 
-#[derive(Debug)]
+#[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct Config {
+    speed: Speed,
+    pullup: bool,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum Error {
     LostArbitration,
     BusError,
@@ -176,12 +187,13 @@ impl<'p> I2CController<'p> {
         }
     }
 
-    pub fn new<T: Instance + 'p, Scl, Sda, Mode>(
+    pub fn new<T: Instance + 'p, Scl: Pin, Sda: Pin, Mode>(
         peri: impl Peripheral<P = T> + 'p,
-        _scl: impl Peripheral<P = Scl> + 'p,
-        _sda: impl Peripheral<P = Sda> + 'p,
+        scl: impl Peripheral<P = Scl> + 'p,
+        sda: impl Peripheral<P = Sda> + 'p,
         _irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>,
         _mode: Mode,
+        config: Config,
     ) -> Self
     where
         (T, Scl, Sda, Mode): ValidI2CConfig,
@@ -192,10 +204,20 @@ impl<'p> I2CController<'p> {
         }
 
         into_ref!(peri);
+        into_ref!(scl);
+        into_ref!(sda);
 
         critical_section::with(|cs| {
+            // Safety: We are disabling low voltage mode and exclusively own the peripherals
+            unsafe {
+                scl.set_low_voltage(cs, false);
+            }
+            unsafe {
+                sda.set_low_voltage(cs, false);
+            }
             // Safety: We have exclusive ownership over the peripherals.
             unsafe { <(T, Scl, Sda, Mode) as sealed::SealedValidI2CConfig>::setup_pins(cs) };
+            unsafe { <(T, Scl, Sda, Mode) as sealed::SealedValidI2CConfig>::setup_pullup(cs, config.pullup) };
         });
 
         let mut dev = Self {
@@ -217,7 +239,7 @@ impl<'p> I2CController<'p> {
                 .clear_bit()
         });
         dev.regs.smbn_ctl4().modify(|_, w| w.lvl_we().clear_bit());
-        dev.speed_init(Speed::Slow);
+        dev.speed_init(config.speed);
         dev.regs.smbn_fif_ctl().modify(|_, w| w.fifo_en().set_bit());
         dev.regs.smbn_ctl2().modify(|_, w| w.enable().set_bit());
         dev.bank_sel(true);
@@ -553,6 +575,7 @@ mod sealed {
 
     pub trait SealedValidI2CConfig {
         unsafe fn setup_pins(cs: critical_section::CriticalSection);
+        unsafe fn setup_pullup(_cs: critical_section::CriticalSection, enable: bool);
     }
 
     pub trait SealedInstance {
@@ -588,7 +611,7 @@ macro_rules! impl_instance {
 }
 
 macro_rules! impl_config {
-    ($instance:ident, $scl:ident, $sda:ident, $pin_config:expr) => {
+    ($instance:ident, $scl:ident, $sda:ident, $pin_config:expr, $pullup_config:expr) => {
         impl<T> sealed::SealedValidI2CConfig
             for (
                 crate::peripherals::$instance,
@@ -605,6 +628,13 @@ macro_rules! impl_config {
                 }
                 internal_set($pin_config);
             }
+
+            unsafe fn setup_pullup(_cs: critical_section::CriticalSection, enable: bool) {
+                fn internal_set(f: impl FnOnce(crate::pac::Sysconfig, bool), enable: bool) {
+                    f(unsafe { crate::pac::Sysconfig::steal() }, enable);
+                }
+                internal_set($pullup_config, enable);
+            }
         }
 
         impl<T> ValidI2CConfig
@@ -620,7 +650,7 @@ macro_rules! impl_config {
 }
 
 macro_rules! impl_config_lpc {
-    ($instance:ident, $scl:ident, $sda:ident, $pin_config:expr) => {
+    ($instance:ident, $scl:ident, $sda:ident, $pin_config:expr, $pullup_config:expr) => {
         impl sealed::SealedValidI2CConfig
             for (
                 crate::peripherals::$instance,
@@ -636,6 +666,13 @@ macro_rules! impl_config_lpc {
                     });
                 }
                 internal_set($pin_config);
+            }
+
+            unsafe fn setup_pullup(_cs: critical_section::CriticalSection, enable: bool) {
+                fn internal_set(f: impl FnOnce(crate::pac::Sysconfig, bool), enable: bool) {
+                    f(unsafe { crate::pac::Sysconfig::steal() }, enable);
+                }
+                internal_set($pullup_config, enable);
             }
         }
 
@@ -660,115 +697,211 @@ impl_instance!(SMB5, Smb5);
 impl_instance!(SMB6, Smb6);
 impl_instance!(SMB7, Smb7);
 
-impl_config!(SMB0, PC12, PB12, |config, _| {
-    config.devalt2().modify(|_, w| w.i2c0_0_sl().set_bit());
-});
+impl_config!(
+    SMB0,
+    PC12,
+    PB12,
+    |config, _| {
+        config.devalt2().modify(|_, w| w.i2c0_0_sl().set_bit());
+    },
+    |config, enable| {
+        config.pupd_en0().modify(|_, w| w.i2c0_0_pue().bit(enable));
+    }
+);
 
-impl_config!(SMB1, PK08, PK07, |config, _| {
-    config.devalt2().modify(|_, w| w.i2c1_0_sl().set_bit());
-});
+impl_config!(
+    SMB1,
+    PK08,
+    PK07,
+    |config, _| {
+        config.devalt2().modify(|_, w| w.i2c1_0_sl().set_bit());
+    },
+    |config, enable| {
+        config.pupd_en0().modify(|_, w| w.i2c1_0_pue().bit(enable));
+    }
+);
 
-impl_config!(SMB2, PL08, PK09, |config, _| {
-    config.devalt2().modify(|_, w| w.i2c2_0_sl().set_bit());
-});
+impl_config!(
+    SMB2,
+    PL08,
+    PK09,
+    |config, _| {
+        config.devalt2().modify(|_, w| w.i2c2_0_sl().set_bit());
+    },
+    |config, enable| {
+        config.pupd_en0().modify(|_, w| w.i2c2_0_pue().bit(enable));
+    }
+);
 
-impl_config!(SMB3, PF08, PF09, |config, _| {
-    config.devalt2().modify(|_, w| w.i2c3_0_sl().set_bit());
-    config.devaltm().modify(|_, w| w.ad22_sl().clear_bit());
-});
+impl_config!(
+    SMB3,
+    PF08,
+    PF09,
+    |config, _| {
+        config.devalt2().modify(|_, w| w.i2c3_0_sl().set_bit());
+        config.devaltm().modify(|_, w| w.ad22_sl().clear_bit());
+    },
+    |config, enable| {
+        config.pupd_en0().modify(|_, w| w.i2c3_0_pue().bit(enable));
+    }
+);
 
-impl_config!(SMB4, PJ06, PJ09, |config, glue| {
-    glue.smb_sel().modify(|_, w| w.smb4_sl().clear_bit());
-    // safety: we are in a critical section
-    unsafe { crate::pac::Miwu0::steal() }
-        .wkpcln5()
-        .write(|w| w.input3().set_bit());
-    config.devalta().modify(|_, w| w._32k_out_sl().clear_bit());
-    config.devalt2().modify(|_, w| w.i2c4_0_sl().set_bit());
-    config
-        .devaltb()
-        .modify(|_, w| w.rxd_sl().clear_bit().txd_sl().clear_bit());
-    config
-        .devaltj()
-        .modify(|_, w| w.cr_sin2_sl().clear_bit().cr_sout2_sl().clear_bit());
-});
+impl_config!(
+    SMB4,
+    PJ06,
+    PJ09,
+    |config, glue| {
+        glue.smb_sel().modify(|_, w| w.smb4_sl().clear_bit());
+        // safety: we are in a critical section
+        unsafe { crate::pac::Miwu0::steal() }
+            .wkpcln5()
+            .write(|w| w.input3().set_bit());
+        config.devalta().modify(|_, w| w._32k_out_sl().clear_bit());
+        config.devalt2().modify(|_, w| w.i2c4_0_sl().set_bit());
+        config
+            .devaltb()
+            .modify(|_, w| w.rxd_sl().clear_bit().txd_sl().clear_bit());
+        config
+            .devaltj()
+            .modify(|_, w| w.cr_sin2_sl().clear_bit().cr_sout2_sl().clear_bit());
+    },
+    |config, enable| {
+        config.pupd_en0().modify(|_, w| w.i2c4_0_pue().bit(enable));
+    }
+);
 
-impl_config!(SMB4, PF05, PF06, |config, glue| {
-    glue.smb_sel().modify(|_, w| w.smb4_sl().set_bit());
-    // safety: we are in a critical section
-    unsafe { crate::pac::Miwu0::steal() }
-        .wkpcln5()
-        .write(|w| w.input3().set_bit());
-    config.devalt6().modify(|_, w| w.i2c4_1_sl().set_bit());
-});
+impl_config!(
+    SMB4,
+    PF05,
+    PF06,
+    |config, glue| {
+        glue.smb_sel().modify(|_, w| w.smb4_sl().set_bit());
+        // safety: we are in a critical section
+        unsafe { crate::pac::Miwu0::steal() }
+            .wkpcln5()
+            .write(|w| w.input3().set_bit());
+        config.devalt6().modify(|_, w| w.i2c4_1_sl().set_bit());
+    },
+    |config, enable| {
+        config.pupd_en1().modify(|_, w| w.i2c4_1_pue().bit(enable));
+    }
+);
 
-impl_config!(SMB5, PD05, PD04, |config, glue| {
-    glue.smb_sel().modify(|_, w| w.smb5_sl().clear_bit());
-    // safety: we are in a critical section
-    unsafe { crate::pac::Miwu2::steal() }
-        .wkpcln7()
-        .write(|w| w.input0().set_bit());
-    config.devalt2().modify(|_, w| w.i2c5_0_sl().set_bit());
-    config
-        .devaltb()
-        .modify(|_, w| w.cts_sl().clear_bit().rts_sl().clear_bit());
-});
+impl_config!(
+    SMB5,
+    PD05,
+    PD04,
+    |config, glue| {
+        glue.smb_sel().modify(|_, w| w.smb5_sl().clear_bit());
+        // safety: we are in a critical section
+        unsafe { crate::pac::Miwu2::steal() }
+            .wkpcln7()
+            .write(|w| w.input0().set_bit());
+        config.devalt2().modify(|_, w| w.i2c5_0_sl().set_bit());
+        config
+            .devaltb()
+            .modify(|_, w| w.cts_sl().clear_bit().rts_sl().clear_bit());
+    },
+    |config, enable| {
+        config.pupd_en0().modify(|_, w| w.i2c5_0_pue().bit(enable));
+    }
+);
 
-impl_config_lpc!(SMB5, PE08, PE09, |config, glue| {
-    glue.smb_sel().modify(|_, w| w.smb5_sl().set_bit());
-    // safety: we are in a critical section
-    unsafe { crate::pac::Miwu2::steal() }
-        .wkpcln7()
-        .write(|w| w.input0().set_bit());
-    config.devalt6().modify(|_, w| w.i2c5_1_sl().set_bit());
-    config.devaltn().modify(|_, w| w.i3c1_sl().clear_bit());
-});
+impl_config_lpc!(
+    SMB5,
+    PE08,
+    PE09,
+    |config, glue| {
+        glue.smb_sel().modify(|_, w| w.smb5_sl().set_bit());
+        // safety: we are in a critical section
+        unsafe { crate::pac::Miwu2::steal() }
+            .wkpcln7()
+            .write(|w| w.input0().set_bit());
+        config.devalt6().modify(|_, w| w.i2c5_1_sl().set_bit());
+        config.devaltn().modify(|_, w| w.i3c1_sl().clear_bit());
+    },
+    |config, enable| {
+        config.pupd_en1().modify(|_, w| w.i2c5_1_pue().bit(enable));
+    }
+);
 
-impl_config!(SMB6, PH10, PH09, |config, glue| {
-    glue.smb_sel().modify(|_, w| w.smb6_sl().clear_bit());
-    // safety: we are in a critical section
-    unsafe { crate::pac::Miwu2::steal() }
-        .wkpcln7()
-        .write(|w| w.input1().set_bit());
-    config.devalt4().modify(|_, w| w.pwm1_sl().clear_bit());
-    config.devalt2().modify(|_, w| w.i2c6_0_sl().set_bit());
-    config.devaltm().modify(|_, w| w.ad22_sl().clear_bit());
-});
+impl_config!(
+    SMB6,
+    PH10,
+    PH09,
+    |config, glue| {
+        glue.smb_sel().modify(|_, w| w.smb6_sl().clear_bit());
+        // safety: we are in a critical section
+        unsafe { crate::pac::Miwu2::steal() }
+            .wkpcln7()
+            .write(|w| w.input1().set_bit());
+        config.devalt4().modify(|_, w| w.pwm1_sl().clear_bit());
+        config.devalt2().modify(|_, w| w.i2c6_0_sl().set_bit());
+        config.devaltm().modify(|_, w| w.ad22_sl().clear_bit());
+    },
+    |config, enable| {
+        config.pupd_en0().modify(|_, w| w.i2c6_0_pue().bit(enable));
+    }
+);
 
-impl_config!(SMB6, PL06, PL07, |config, glue| {
-    glue.smb_sel().modify(|_, w| w.smb6_sl().set_bit());
-    // safety: we are in a critical section
-    unsafe { crate::pac::Miwu2::steal() }
-        .wkpcln7()
-        .write(|w| w.input1().set_bit());
-    config.devalt6().modify(|_, w| w.i2c6_1_sl().set_bit());
-    config.devaltn().modify(|_, w| w.i3c1_sl().clear_bit());
-});
+impl_config!(
+    SMB6,
+    PL06,
+    PL07,
+    |config, glue| {
+        glue.smb_sel().modify(|_, w| w.smb6_sl().set_bit());
+        // safety: we are in a critical section
+        unsafe { crate::pac::Miwu2::steal() }
+            .wkpcln7()
+            .write(|w| w.input1().set_bit());
+        config.devalt6().modify(|_, w| w.i2c6_1_sl().set_bit());
+        config.devaltn().modify(|_, w| w.i3c1_sl().clear_bit());
+    },
+    |config, enable| {
+        config.pupd_en1().modify(|_, w| w.i2c6_1_pue().bit(enable));
+    }
+);
 
-impl_config!(SMB7, PJ10, PK10, |config, glue| {
-    glue.smb_sel().modify(|_, w| w.smb7_sl().clear_bit());
-    // safety: we are in a critical section
-    unsafe { crate::pac::Miwu2::steal() }
-        .wkpcln7()
-        .write(|w| w.input2().set_bit());
-    config.devalt2().modify(|_, w| w.i2c7_0_sl().set_bit());
-    config
-        .devaltb()
-        .modify(|_, w| w.dsr_sl().clear_bit().dcd_sl().clear_bit());
-});
+impl_config!(
+    SMB7,
+    PJ10,
+    PK10,
+    |config, glue| {
+        glue.smb_sel().modify(|_, w| w.smb7_sl().clear_bit());
+        // safety: we are in a critical section
+        unsafe { crate::pac::Miwu2::steal() }
+            .wkpcln7()
+            .write(|w| w.input2().set_bit());
+        config.devalt2().modify(|_, w| w.i2c7_0_sl().set_bit());
+        config
+            .devaltb()
+            .modify(|_, w| w.dsr_sl().clear_bit().dcd_sl().clear_bit());
+    },
+    |config, enable| {
+        config.pupd_en0().modify(|_, w| w.i2c7_0_pue().bit(enable));
+    }
+);
 
-impl_config!(SMB7, PH08, PJ07, |config, glue| {
-    glue.smb_sel().modify(|_, w| w.smb7_sl().set_bit());
-    // safety: we are in a critical section
-    unsafe { crate::pac::Miwu2::steal() }
-        .wkpcln7()
-        .write(|w| w.input2().set_bit());
-    config
-        .devalt4()
-        .modify(|_, w| w.pwm5_sl().clear_bit().pwm6_sl().clear_bit());
-    config.devaltk().modify(|_, w| w.i2c7_1_sl().set_bit());
-    // Note: this messes with debug interfaces, maybe there is a better way?
-    unsafe { crate::pac::Dev::steal() }
-        .dbgctrl2()
-        .modify(|_, w| w.ccdev_sel().bits(6));
-});
+impl_config!(
+    SMB7,
+    PH08,
+    PJ07,
+    |config, glue| {
+        glue.smb_sel().modify(|_, w| w.smb7_sl().set_bit());
+        // safety: we are in a critical section
+        unsafe { crate::pac::Miwu2::steal() }
+            .wkpcln7()
+            .write(|w| w.input2().set_bit());
+        config
+            .devalt4()
+            .modify(|_, w| w.pwm5_sl().clear_bit().pwm6_sl().clear_bit());
+        config.devaltk().modify(|_, w| w.i2c7_1_sl().set_bit());
+        // Note: this messes with debug interfaces, maybe there is a better way?
+        unsafe { crate::pac::Dev::steal() }
+            .dbgctrl2()
+            .modify(|_, w| w.ccdev_sel().bits(6));
+    },
+    |config, enable| {
+        config.pupd_en1().modify(|_, w| w.i2c7_1_pue().bit(enable));
+    }
+);
