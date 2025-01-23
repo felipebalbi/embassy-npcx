@@ -41,7 +41,8 @@ embassy_hal_internal::peripherals!(
     MIWU2_40, MIWU2_41, MIWU2_42, MIWU2_43, MIWU2_44, MIWU2_45, MIWU2_46, MIWU2_47, MIWU2_50, MIWU2_51, MIWU2_52,
     MIWU2_53, MIWU2_54, MIWU2_55, MIWU2_56, MIWU2_57, MIWU2_60, MIWU2_61, MIWU2_62, MIWU2_63, MIWU2_64, MIWU2_65,
     MIWU2_66, MIWU2_67, MIWU2_70, MIWU2_71, MIWU2_72, MIWU2_73, MIWU2_74, MIWU2_75, MIWU2_76, MIWU2_77, MIWU2_80,
-    MIWU2_81, MIWU2_82, MIWU2_83, MIWU2_84, MIWU2_85, MIWU2_86, MIWU2_87
+    MIWU2_81, MIWU2_82, MIWU2_83, MIWU2_84, MIWU2_85, MIWU2_86, MIWU2_87, SMB0, SMB1, SMB2, SMB3, SMB4, SMB5, SMB6,
+    SMB7,
 );
 
 #[macro_export]
@@ -126,7 +127,6 @@ pub fn init_espi(config: Config) -> (Peripherals, ESpi) {
     (per, ESpi {})
 }
 
-#[cfg(feature = "rt")]
 embassy_hal_internal::interrupt_mod!(
     KBS,
     PM_OBE,
