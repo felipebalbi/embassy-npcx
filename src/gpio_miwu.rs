@@ -8,8 +8,12 @@ use embassy_hal_internal::Peripheral;
 use crate::gpio::{CanPullUp, Input, InputPin, LowVoltagePin, PullDownOnly};
 use crate::miwu::{Edge, Level, WakeUp, WakeUpInput};
 
+mod sealed {
+    pub trait SealedAwaitableInputPin {}
+}
+
 /// GPIO pins that have an WakeUpInput channel associated with them.
-pub trait AwaitableInputPin {}
+pub trait AwaitableInputPin: sealed::SealedAwaitableInputPin {}
 
 /// Driver for GPIO input pins and their WakeUpInput channel.
 ///
@@ -101,6 +105,7 @@ impl<T> embedded_hal_async::digital::Wait for AwaitableInput<'_, T> {
 
 macro_rules! impl_pin_channel {
     ($pin:ident, $channel:ident) => {
+        impl sealed::SealedAwaitableInputPin for (crate::gpio::$pin, crate::peripherals::$channel) {}
         impl AwaitableInputPin for (crate::gpio::$pin, crate::peripherals::$channel) {}
     };
 }
