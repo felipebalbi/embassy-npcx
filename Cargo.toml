@@ -8,7 +8,7 @@ description = "Embassy HAL for Nuvoton NPCX MCU family"
 readme = "README.md"
 keywords = [ "embedded", "async", "npcx490m", "nuvoton", "embedded-hal" ]
 categories = [ "embedded", "hardware-support", "no-std", "asynchronous" ]
-repository = "https://github.com/pop-project/embassy-npcx"
+repository = "https://github.com/OpenDevicePartnership/embassy-npcx"
 rust-version = "1.80.0"
 
 [features]
@@ -17,7 +17,7 @@ defmt = ["dep:defmt"]
 rt = ["npcx490m-pac/rt", "dep:cortex-m-rt"]
 
 [dependencies]
-npcx490m-pac = { git = "https://github.com/pop-project/npcx490m-pac", features = ["critical-section"] }
+npcx490m-pac = { git = "https://github.com/OpenDevicePartnership/npcx490m-pac", features = ["rt", "critical-section"] }
 embassy-hal-internal = { git = "https://github.com/embassy-rs/embassy", features = ["cortex-m", "prio-bits-0"] }
 embassy-sync = { git = "https://github.com/embassy-rs/embassy" }
 cortex-m-rt = { version = ">=0.6.15,<0.8", optional = true }
