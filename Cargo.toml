@@ -21,9 +21,10 @@ npcx490m-pac = { git = "https://github.com/OpenDevicePartnership/npcx490m-pac", 
 embassy-hal-internal = { git = "https://github.com/embassy-rs/embassy", features = ["cortex-m", "prio-bits-0"] }
 embassy-sync = { git = "https://github.com/embassy-rs/embassy" }
 cortex-m-rt = { version = ">=0.6.15,<0.8", optional = true }
+cortex-m = "0.7.7"
 
 critical-section = "1.1"
 defmt = { version = "0.3", optional = true }
-embedded-hal = "1.0"
-embedded-hal-async = "1.0"
+embedded-hal = "1.0.0"
+embedded-hal-async = "1.0.0"
 paste = "1.0"

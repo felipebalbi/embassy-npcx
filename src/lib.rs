@@ -1,5 +1,6 @@
 #![no_std]
 
+pub mod cdcg;
 pub mod gpio;
 pub mod miwu;
 
@@ -7,6 +8,12 @@ pub mod miwu;
 pub mod gpio_miwu;
 
 pub use npcx490m_pac as pac;
+
+#[non_exhaustive]
+#[derive(Debug, Clone, Default)]
+pub struct Config {
+    pub cdcg: cdcg::Config,
+}
 
 embassy_hal_internal::peripherals!(
     PA02, PA03, PA04, PA09, PA10, PA11, PA12, PB02, PB03, PB04, PB05, PB06, PB07, PB08, PB09, PB10, PB11, PB12, PC01,
@@ -36,7 +43,9 @@ embassy_hal_internal::peripherals!(
     MIWU2_81, MIWU2_82, MIWU2_83, MIWU2_84, MIWU2_85, MIWU2_86, MIWU2_87
 );
 
-pub fn init() -> Peripherals {
+pub fn init(config: Config) -> Peripherals {
+    cdcg::init_clocks(config.cdcg);
+
     Peripherals::take()
 }
 
