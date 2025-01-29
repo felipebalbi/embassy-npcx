@@ -5,6 +5,7 @@ use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
 use embassy_sync::waitqueue::AtomicWaker;
 pub use embedded_hal_async::i2c::{I2c, Operation};
 
+use crate::cdcg::get_clocks;
 use crate::gpio::Pin;
 use crate::interrupt::typelevel::Interrupt;
 
@@ -78,8 +79,8 @@ pub enum Speed {
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Config {
-    speed: Speed,
-    pullup: bool,
+    pub speed: Speed,
+    pub pullup: bool,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -173,17 +174,210 @@ impl<'p> I2CController<'p> {
     /// Initialize speed settings
     ///
     /// Should be called only with bank 0 selected and peripheral disabled
-    fn speed_init(&mut self, speed: Speed) {
+    fn speed_init(&mut self, speed: Speed, clk: u32) {
+        struct StandardMode {
+            sclfrq: u16,
+            hldt: u8,
+        }
+
+        struct FastMode {
+            scllt: u8,
+            sclht: u8,
+            hldt: u8,
+        }
+
+        const STANDARDMODE: [(u32, StandardMode); 7] = [
+            (15_000_000, StandardMode { sclfrq: 38, hldt: 15 }),
+            (25_000_000, StandardMode { sclfrq: 63, hldt: 15 }),
+            (30_000_000, StandardMode { sclfrq: 77, hldt: 17 }),
+            (40_000_000, StandardMode { sclfrq: 101, hldt: 17 }),
+            (48_000_000, StandardMode { sclfrq: 121, hldt: 17 }),
+            (50_000_000, StandardMode { sclfrq: 126, hldt: 17 }),
+            (60_000_000, StandardMode { sclfrq: 152, hldt: 17 }),
+        ];
+
+        const FASTMODE: [(u32, FastMode); 8] = [
+            (
+                15_000_000,
+                FastMode {
+                    scllt: 12,
+                    sclht: 9,
+                    hldt: 7,
+                },
+            ),
+            (
+                20_000_000,
+                FastMode {
+                    scllt: 16,
+                    sclht: 11,
+                    hldt: 7,
+                },
+            ),
+            (
+                24_000_000,
+                FastMode {
+                    scllt: 20,
+                    sclht: 13,
+                    hldt: 8,
+                },
+            ),
+            (
+                30_000_000,
+                FastMode {
+                    scllt: 24,
+                    sclht: 16,
+                    hldt: 10,
+                },
+            ),
+            (
+                40_000_000,
+                FastMode {
+                    scllt: 32,
+                    sclht: 21,
+                    hldt: 13,
+                },
+            ),
+            (
+                48_000_000,
+                FastMode {
+                    scllt: 39,
+                    sclht: 25,
+                    hldt: 16,
+                },
+            ),
+            (
+                50_000_000,
+                FastMode {
+                    scllt: 40,
+                    sclht: 26,
+                    hldt: 17,
+                },
+            ),
+            (
+                60_000_000,
+                FastMode {
+                    scllt: 48,
+                    sclht: 31,
+                    hldt: 20,
+                },
+            ),
+        ];
+
+        const FASTMODEPLUS: [(u32, FastMode); 7] = [
+            (
+                15_000_000,
+                FastMode {
+                    scllt: 7,
+                    sclht: 5,
+                    hldt: 7,
+                },
+            ),
+            (
+                24_000_000,
+                FastMode {
+                    scllt: 8,
+                    sclht: 5,
+                    hldt: 7,
+                },
+            ),
+            (
+                30_000_000,
+                FastMode {
+                    scllt: 10,
+                    sclht: 7,
+                    hldt: 7,
+                },
+            ),
+            (
+                40_000_000,
+                FastMode {
+                    scllt: 13,
+                    sclht: 10,
+                    hldt: 7,
+                },
+            ),
+            (
+                48_000_000,
+                FastMode {
+                    scllt: 15,
+                    sclht: 11,
+                    hldt: 7,
+                },
+            ),
+            (
+                50_000_000,
+                FastMode {
+                    scllt: 16,
+                    sclht: 11,
+                    hldt: 8,
+                },
+            ),
+            (
+                60_000_000,
+                FastMode {
+                    scllt: 19,
+                    sclht: 13,
+                    hldt: 9,
+                },
+            ),
+        ];
+
         match speed {
             Speed::Slow => {
+                let mut i = 0;
+                while STANDARDMODE[i].0 < clk {
+                    i += 1;
+                }
+
+                self.regs.smbn_ctl3().modify(|_, w| unsafe {
+                    w._400k_mode()
+                        .clear_bit()
+                        .sclfrq8_7()
+                        .bits(((STANDARDMODE[i].1.sclfrq & 0x180) >> 7) as u8)
+                });
+                self.regs
+                    .smbn_ctl4()
+                    .modify(|_, w| unsafe { w.hldt().bits(STANDARDMODE[i].1.hldt) });
+                self.regs
+                    .smbn_ctl2()
+                    .modify(|_, w| unsafe { w.sclfrq6_0().bits((STANDARDMODE[i].1.sclfrq & 0x7F) as u8) });
+            }
+            Speed::Fast => {
+                let mut i = 0;
+                while FASTMODE[i].0 < clk {
+                    i += 1;
+                }
+
                 self.regs
                     .smbn_ctl3()
-                    .modify(|_, w| unsafe { w._400k_mode().clear_bit().sclfrq8_7().bits(0) });
-                self.regs.smbn_ctl4().modify(|_, w| unsafe { w.hldt().bits(15) });
-                self.regs.smbn_ctl2().modify(|_, w| unsafe { w.sclfrq6_0().bits(63) });
+                    .modify(|_, w| unsafe { w._400k_mode().set_bit().sclfrq8_7().bits(0) });
+                self.regs
+                    .smbn_ctl4()
+                    .modify(|_, w| unsafe { w.hldt().bits(FASTMODE[i].1.hldt) });
+                self.regs.smbn_ctl2().modify(|_, w| unsafe { w.sclfrq6_0().bits(0) });
+                self.regs.smbn_scllt().write(|w| unsafe { w.bits(FASTMODE[i].1.scllt) });
+                self.regs.smbn_sclht().write(|w| unsafe { w.bits(FASTMODE[i].1.sclht) });
             }
-            Speed::Fast => todo!(),
-            Speed::FastPlus => todo!(),
+            Speed::FastPlus => {
+                let mut i = 0;
+                while FASTMODEPLUS[i].0 < clk {
+                    i += 1;
+                }
+
+                self.regs
+                    .smbn_ctl3()
+                    .modify(|_, w| unsafe { w._400k_mode().set_bit().sclfrq8_7().bits(0) });
+                self.regs
+                    .smbn_ctl4()
+                    .modify(|_, w| unsafe { w.hldt().bits(FASTMODEPLUS[i].1.hldt) });
+                self.regs.smbn_ctl2().modify(|_, w| unsafe { w.sclfrq6_0().bits(0) });
+                self.regs
+                    .smbn_scllt()
+                    .write(|w| unsafe { w.bits(FASTMODEPLUS[i].1.scllt) });
+                self.regs
+                    .smbn_sclht()
+                    .write(|w| unsafe { w.bits(FASTMODEPLUS[i].1.sclht) });
+            }
         }
     }
 
@@ -239,7 +433,8 @@ impl<'p> I2CController<'p> {
                 .clear_bit()
         });
         dev.regs.smbn_ctl4().modify(|_, w| w.lvl_we().clear_bit());
-        dev.speed_init(config.speed);
+        // Safety: We have the peripheral, so init was called.
+        dev.speed_init(config.speed, unsafe { T::clockfreq() });
         dev.regs.smbn_fif_ctl().modify(|_, w| w.fifo_en().set_bit());
         dev.regs.smbn_ctl2().modify(|_, w| w.enable().set_bit());
         dev.bank_sel(true);
@@ -581,6 +776,8 @@ mod sealed {
     pub trait SealedInstance {
         fn waker() -> &'static AtomicWaker;
         fn regs() -> &'static crate::pac::smb0::RegisterBlock;
+        /// Safety: should only be called after clock init
+        unsafe fn clockfreq() -> u32;
     }
 }
 
@@ -591,7 +788,7 @@ pub trait Instance: sealed::SealedInstance + embassy_hal_internal::Peripheral<P 
 }
 
 macro_rules! impl_instance {
-    ($instance:ident, $pac:ident) => {
+    ($instance:ident, $pac:ident, $clock:ident) => {
         impl sealed::SealedInstance for crate::peripherals::$instance {
             fn waker() -> &'static AtomicWaker {
                 static WAKER: AtomicWaker = AtomicWaker::new();
@@ -601,6 +798,11 @@ macro_rules! impl_instance {
             fn regs() -> &'static crate::pac::smb0::RegisterBlock {
                 // Safety: not owned, memory is always present
                 unsafe { &*crate::pac::$pac::PTR }
+            }
+
+            unsafe fn clockfreq() -> u32 {
+                // Safety: We require clock init to be called before this is called
+                unsafe { get_clocks() }.$clock
             }
         }
 
@@ -688,14 +890,14 @@ macro_rules! impl_config_lpc {
     };
 }
 
-impl_instance!(SMB0, Smb0);
-impl_instance!(SMB1, Smb1);
-impl_instance!(SMB2, Smb2);
-impl_instance!(SMB3, Smb3);
-impl_instance!(SMB4, Smb4);
-impl_instance!(SMB5, Smb5);
-impl_instance!(SMB6, Smb6);
-impl_instance!(SMB7, Smb7);
+impl_instance!(SMB0, Smb0, apb3_clk);
+impl_instance!(SMB1, Smb1, apb3_clk);
+impl_instance!(SMB2, Smb2, apb2_clk);
+impl_instance!(SMB3, Smb3, apb2_clk);
+impl_instance!(SMB4, Smb4, apb3_clk);
+impl_instance!(SMB5, Smb5, apb3_clk);
+impl_instance!(SMB6, Smb6, apb3_clk);
+impl_instance!(SMB7, Smb7, apb3_clk);
 
 impl_config!(
     SMB0,
