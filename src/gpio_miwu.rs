@@ -6,7 +6,7 @@ use core::ops::{Deref, DerefMut};
 use embassy_hal_internal::Peripheral;
 
 use crate::gpio::{CanPullUp, Input, InputPin, LowVoltagePin, PullDownOnly};
-use crate::miwu::{Edge, Level, WakeUp, WakeUpInput};
+use crate::miwu::{Edge, InterruptHandler, Level, WakeUp, WakeUpInput};
 
 mod sealed {
     pub trait SealedAwaitableInputPin {}
@@ -25,7 +25,11 @@ pub struct AwaitableInput<'d, T> {
 }
 
 impl<'d> AwaitableInput<'d, CanPullUp> {
-    pub fn new<PIN, WUI>(pin: impl Peripheral<P = PIN> + 'd, wui: impl Peripheral<P = WUI> + 'd) -> Self
+    pub fn new<PIN, WUI>(
+        pin: impl Peripheral<P = PIN> + 'd,
+        wui: impl Peripheral<P = WUI> + 'd,
+        irqs: impl crate::interrupt::typelevel::Binding<WUI::Interrupt, InterruptHandler<WUI>>,
+    ) -> Self
     where
         PIN: InputPin + 'd,
         WUI: WakeUpInput + 'd,
@@ -33,13 +37,17 @@ impl<'d> AwaitableInput<'d, CanPullUp> {
     {
         AwaitableInput {
             pin: Input::new(pin),
-            wui: WakeUp::new(wui),
+            wui: WakeUp::new(wui, irqs),
         }
     }
 }
 
 impl<'d> AwaitableInput<'d, PullDownOnly> {
-    pub fn new_lowvoltage<PIN, WUI>(pin: impl Peripheral<P = PIN> + 'd, wui: impl Peripheral<P = WUI> + 'd) -> Self
+    pub fn new_lowvoltage<PIN, WUI>(
+        pin: impl Peripheral<P = PIN> + 'd,
+        wui: impl Peripheral<P = WUI> + 'd,
+        irqs: impl crate::interrupt::typelevel::Binding<WUI::Interrupt, InterruptHandler<WUI>>,
+    ) -> Self
     where
         PIN: LowVoltagePin + 'd,
         WUI: WakeUpInput + 'd,
@@ -47,7 +55,7 @@ impl<'d> AwaitableInput<'d, PullDownOnly> {
     {
         AwaitableInput {
             pin: Input::new_lowvoltage(pin),
-            wui: WakeUp::new(wui),
+            wui: WakeUp::new(wui, irqs),
         }
     }
 }

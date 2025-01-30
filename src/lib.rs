@@ -2,12 +2,10 @@
 
 pub mod cdcg;
 pub mod gpio;
+pub mod gpio_miwu;
+pub mod i2c;
 pub mod miwu;
 
-#[cfg(feature = "rt")]
-pub mod gpio_miwu;
-
-pub mod i2c;
 pub use npcx490m_pac as pac;
 
 #[non_exhaustive]
