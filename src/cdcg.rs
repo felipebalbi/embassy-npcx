@@ -312,7 +312,7 @@ pub(crate) fn init_clocks(config: Config) {
 
 #[allow(unused)]
 #[derive(Debug)]
-#[cfg_attr(feature = "defmt", defmt::Format)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub(crate) struct Clocks {
     pub(crate) voscclock: u32,
     pub(crate) mclk: u32,
