@@ -71,7 +71,7 @@ impl ReadCompletion<'_> {
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Speed {
     #[default]
-    Slow,
+    Standard,
     Fast,
     FastPlus,
 }
@@ -87,8 +87,8 @@ pub struct Config {
 pub enum Error {
     LostArbitration,
     BusError,
-    NegativeAckAddress,
-    NegativeAckData,
+    AddressNack,
+    DataNack,
 }
 
 impl embedded_hal_async::i2c::Error for Error {
@@ -96,10 +96,10 @@ impl embedded_hal_async::i2c::Error for Error {
         match self {
             Error::LostArbitration => embedded_hal::i2c::ErrorKind::ArbitrationLoss,
             Error::BusError => embedded_hal::i2c::ErrorKind::Bus,
-            Error::NegativeAckData => {
+            Error::DataNack => {
                 embedded_hal::i2c::ErrorKind::NoAcknowledge(embedded_hal::i2c::NoAcknowledgeSource::Data)
             }
-            Error::NegativeAckAddress => {
+            Error::AddressNack => {
                 embedded_hal::i2c::ErrorKind::NoAcknowledge(embedded_hal::i2c::NoAcknowledgeSource::Address)
             }
         }
@@ -323,7 +323,7 @@ impl<'p> I2CController<'p> {
         ];
 
         match speed {
-            Speed::Slow => {
+            Speed::Standard => {
                 let mut i = 0;
                 while STANDARDMODE[i].0 < clk {
                     i += 1;
@@ -489,7 +489,7 @@ impl<'p> I2CController<'p> {
             }
             if r.negack().bit_is_set() {
                 self.handle_negack();
-                return Err(Error::NegativeAckData);
+                return Err(Error::DataNack);
             }
 
             // Add new data
@@ -644,7 +644,7 @@ impl<'p> I2CController<'p> {
                         }
                         if r.negack().bit_is_set() {
                             self.handle_negack();
-                            return Err(Error::NegativeAckAddress);
+                            return Err(Error::AddressNack);
                         }
                     }
 
@@ -701,7 +701,7 @@ impl<'p> I2CController<'p> {
                         }
                         if r.negack().bit_is_set() {
                             self.handle_negack();
-                            return Err(Error::NegativeAckAddress);
+                            return Err(Error::AddressNack);
                         }
 
                         if data.is_empty() {
