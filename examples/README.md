@@ -1,7 +1,6 @@
 # NPCX490M Examples
 
-A collection of examples demonstrating the use of the
-[npcx490m-pac](https://github.com/pop-project/npcx490m-pac) crate.
+A collection of examples demonstrating the use of the HAL crate.
 
 ## Dependencies
 
