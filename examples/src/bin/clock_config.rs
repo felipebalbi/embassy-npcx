@@ -25,7 +25,7 @@ async fn main(_spawner: Spawner) {
         config.cdcg.apb3_divider = MclkDivider::Div2;
         config.cdcg.apb4_divider = MclkDivider::Div2;
     }
-    let p = embassy_npcx::init(config);
+    let (p, _mode) = embassy_npcx::init_lpc(config);
 
     let mut led = Output::<'_, OutputOnly>::new(p.PJ07, Level::High);
 

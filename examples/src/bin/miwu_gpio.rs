@@ -14,7 +14,7 @@ use {defmt_rtt as _, panic_probe as _};
 async fn main(_spawner: Spawner) {
     info!("To use, configure JP2 to '2' and press SW1. LED D8 should light up.");
 
-    let p = embassy_npcx::init(Config::default());
+    let (p, _mode) = embassy_npcx::init_lpc(Config::default());
 
     let mut button = AwaitableInput::new(p.PJ02, p.MIWU1_73);
     button.enable_pullup();
