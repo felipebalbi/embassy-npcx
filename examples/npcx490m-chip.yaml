@@ -1,0 +1,37 @@
+---
+# The name of the chip family.
+name: NPCX49nM
+# A list of all the chips in the family.
+variants:
+  # The name of the chip.
+  - name: NPCX498M
+    # Descriptions of the CPU cores.
+    cores:
+      # The name of the core.
+      - name: core1
+        # Architecture
+        type: armv7em
+        # Core-specific options. Can be one of: `!Arm {}`, `!Riscv {}`, `!Xtensa {}`
+        core_access_options: !Arm
+          ap: 0
+    # A list of all the available memories and their properties.
+    memory_map:
+      # The type of the memory. Possible are [!Ram, !Nvm, !Generic].
+      # There needs to be at least one of !Ram and !Nvm present.
+      - !Generic
+        name: BootROM
+        range:
+          start: 0x0
+          end: 0x2FFFF
+        cores:
+          - core1
+      - !Ram
+        name: CODE_RAM_alias
+        range:
+          # The start address of the memory (inclusive).
+          start: 0x20060000
+          # The end address of the memory (inclusive).
+          end: 0x200BFFFF
+        # List of cores that can access this region
+        cores:
+          - core1
