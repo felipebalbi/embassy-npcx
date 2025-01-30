@@ -28,7 +28,7 @@ impl From<bool> for Level {
     }
 }
 
-mod sealed {
+pub(crate) mod sealed {
     pub trait SealedPin {
         #[must_use]
         fn pin(&self) -> u8;

@@ -1,6 +1,6 @@
 # Enable once probe-rs support is implemented
 [target.thumbv7em-none-eabihf]
-runner = 'probe-rs run --chip-description-path ./npcx490m-chip.yaml --chip NPCX498M --speed 1800'
+runner = 'probe-rs run --chip-description-path ./npcx490m-chip.yaml --chip NPCX498M --speed 1800 --catch-reset --catch-hardfault --always-print-stacktrace'
 
 rustflags = [
   "-C", "linker=flip-link",

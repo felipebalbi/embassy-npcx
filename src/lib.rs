@@ -7,6 +7,7 @@ pub mod miwu;
 #[cfg(feature = "rt")]
 pub mod gpio_miwu;
 
+pub mod i2c;
 pub use npcx490m_pac as pac;
 
 #[non_exhaustive]
@@ -40,16 +41,92 @@ embassy_hal_internal::peripherals!(
     MIWU2_40, MIWU2_41, MIWU2_42, MIWU2_43, MIWU2_44, MIWU2_45, MIWU2_46, MIWU2_47, MIWU2_50, MIWU2_51, MIWU2_52,
     MIWU2_53, MIWU2_54, MIWU2_55, MIWU2_56, MIWU2_57, MIWU2_60, MIWU2_61, MIWU2_62, MIWU2_63, MIWU2_64, MIWU2_65,
     MIWU2_66, MIWU2_67, MIWU2_70, MIWU2_71, MIWU2_72, MIWU2_73, MIWU2_74, MIWU2_75, MIWU2_76, MIWU2_77, MIWU2_80,
-    MIWU2_81, MIWU2_82, MIWU2_83, MIWU2_84, MIWU2_85, MIWU2_86, MIWU2_87
+    MIWU2_81, MIWU2_82, MIWU2_83, MIWU2_84, MIWU2_85, MIWU2_86, MIWU2_87, SMB0, SMB1, SMB2, SMB3, SMB4, SMB5, SMB6,
+    SMB7,
 );
 
-pub fn init(config: Config) -> Peripherals {
+#[macro_export]
+macro_rules! bind_interrupts {
+    ($vis:vis struct $name:ident {
+        $(
+            $(#[cfg($cond_irq:meta)])?
+            $irq:ident => $(
+                $(#[cfg($cond_handler:meta)])?
+                $handler:ty
+            ),*;
+        )*
+    }) => {
+        #[derive(Copy, Clone)]
+        $vis struct $name;
+
+        $(
+            #[allow(non_snake_case)]
+            #[no_mangle]
+            $(#[cfg($cond_irq)])?
+            unsafe extern "C" fn $irq() {
+                $(
+                    $(#[cfg($cond_handler)])?
+                    <$handler as $crate::interrupt::typelevel::Handler<$crate::interrupt::typelevel::$irq>>::on_interrupt();
+
+                )*
+            }
+
+            $(#[cfg($cond_irq)])?
+            $crate::bind_interrupts!(@inner
+                $(
+                    $(#[cfg($cond_handler)])?
+                    unsafe impl $crate::interrupt::typelevel::Binding<$crate::interrupt::typelevel::$irq, $handler> for $name {}
+                )*
+            );
+        )*
+    };
+    (@inner $($t:tt)*) => {
+        $($t)*
+    }
+}
+
+/// Marker struct for LPC mode
+// marked non-exhaustive to ensure the user can't create one from nothing
+#[non_exhaustive]
+#[derive(Debug, Copy, Clone)]
+pub struct Lpc {}
+
+/// Marker struct for ESpi mode
+// marked non-exhaustive to ensure the user can't create one from nothing
+#[non_exhaustive]
+#[derive(Debug, Copy, Clone)]
+pub struct ESpi {}
+
+fn init(config: Config) -> Peripherals {
     cdcg::init_clocks(config.cdcg);
 
     Peripherals::take()
 }
 
-#[cfg(feature = "rt")]
+pub fn init_lpc(config: Config) -> (Peripherals, Lpc) {
+    let per = init(config);
+
+    // We still have control over all peripherals, so this is safe to do outside a critical section
+    unsafe { crate::pac::Sysconfig::steal() }.devcnt().modify(|r, w| {
+        assert!(r.hif_typ_sel().bits() == 0 || r.hif_typ_sel().bits() == 1);
+        unsafe { w.hif_typ_sel().bits(1) }
+    });
+
+    (per, Lpc {})
+}
+
+pub fn init_espi(config: Config) -> (Peripherals, ESpi) {
+    let per = init(config);
+
+    // We still have control over all peripherals, so this is safe to do outside a critical section
+    unsafe { crate::pac::Sysconfig::steal() }.devcnt().modify(|r, w| {
+        assert!(r.hif_typ_sel().bits() == 0 || r.hif_typ_sel().bits() == 2);
+        unsafe { w.hif_typ_sel().bits(2) }
+    });
+
+    (per, ESpi {})
+}
+
 embassy_hal_internal::interrupt_mod!(
     KBS,
     PM_OBE,
