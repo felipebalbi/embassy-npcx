@@ -501,6 +501,26 @@ impl<'p> I2CController<'p> {
             self.regs.smbn_txf_sts().write(|w| w.tx_thst().set_bit());
         }
 
+        // Wait for completion
+        self.regs.smbn_txf_ctl().modify(|_, w| w.thr_txie().clear_bit());
+        let r = self
+            .wait_for(|| {
+                let r = self.regs.smbn_st().read();
+                if r.ber().bit_is_set() || r.negack().bit_is_set() || r.sdast().bit_is_set() {
+                    Some(r)
+                } else {
+                    None
+                }
+            })
+            .await;
+        if r.ber().bit_is_set() {
+            return self.handle_ber();
+        }
+        if r.negack().bit_is_set() {
+            self.handle_negack();
+            return Err(Error::DataNack);
+        }
+
         Ok(())
     }
 
