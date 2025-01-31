@@ -548,13 +548,13 @@ impl<'p> I2CController<'p> {
                     .bits(group.len() as u8)
             });
         } else if data.len() <= (2 * FIFO_SIZE).into() {
-            (data, group) = data.split_at_mut(FIFO_SIZE as _);
+            (group, data) = data.split_at_mut(FIFO_SIZE as _);
             // Ensure we stall before the final group
             self.regs
                 .smbn_rxf_ctl()
                 .write(|w| unsafe { w.last_pec().clear_bit().thr_rxie().clear_bit().rx_thr().bits(FIFO_SIZE) });
         } else {
-            (data, group) = data.split_at_mut(GROUP_SIZE as _);
+            (group, data) = data.split_at_mut(GROUP_SIZE as _);
             // Can do bulk transfer without stalling
             self.regs
                 .smbn_rxf_ctl()
@@ -572,15 +572,29 @@ impl<'p> I2CController<'p> {
             if data.len() <= FIFO_SIZE.into() {
                 next_group = data;
                 data = &mut [];
-                // Add nack at end
-                self.regs.smbn_rxf_ctl().write(|w| unsafe {
-                    w.last_pec()
-                        .bit(negack_last)
-                        .thr_rxie()
-                        .clear_bit()
-                        .rx_thr()
-                        .bits(group.len() as u8)
-                });
+
+                // The last group is somewhat tricky, as we want to avoid
+                // the nack being sent at the wrong time. The approach in the manual
+                // isn't really working for us, so we do some different trickery here.
+
+                // We implement two cases here, based on the length of the next group
+
+                if next_group.len() == 1 {
+                    // No real risk, just setup the transfer
+                    self.regs.smbn_rxf_ctl().write(|w| unsafe {
+                        w.last_pec()
+                            .bit(negack_last)
+                            .thr_rxie()
+                            .clear_bit()
+                            .rx_thr()
+                            .bits(next_group.len() as u8)
+                    });
+                } else {
+                    // Transfer just 1 byte from the next group at first, with no nack yet
+                    self.regs
+                        .smbn_rxf_ctl()
+                        .write(|w| unsafe { w.last_pec().clear_bit().thr_rxie().clear_bit().rx_thr().bits(1) });
+                }
             } else if data.len() <= (2 * FIFO_SIZE).into() {
                 (next_group, data) = data.split_at_mut(FIFO_SIZE as _);
                 // Ensure we stall before the final group
@@ -595,6 +609,18 @@ impl<'p> I2CController<'p> {
             // Next group is setup, so we can safely read data
             for b in group {
                 *b = self.regs.smbn_sda().read().bits();
+            }
+
+            if data.len() == 0 {
+                // setup the actual last group
+                self.regs.smbn_rxf_ctl().write(|w| unsafe {
+                    w.last_pec()
+                        .bit(negack_last)
+                        .thr_rxie()
+                        .clear_bit()
+                        .rx_thr()
+                        .bits(next_group.len() as u8)
+                });
             }
 
             // And clear rx threshold status
