@@ -885,8 +885,6 @@ impl<'p> I2CController<'p> {
         Ok(())
     }
 
-    // TODO: Remove
-    #[allow(unused)]
     fn disable_addresses(&mut self) {
         self.bank_sel(false);
         self.regs.smbn_ctl1().modify(|_, w| w.gcmen().clear_bit());
