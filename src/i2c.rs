@@ -1,8 +1,11 @@
 use core::future::Future;
 use core::marker::PhantomData;
 
+use embassy_futures::select::select;
 use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
+use embassy_sync::blocking_mutex::raw::RawMutex;
 use embassy_sync::waitqueue::AtomicWaker;
+use embassy_sync::watch;
 pub use embedded_hal_async::i2c::{I2c, Operation};
 
 use crate::cdcg::get_clocks;
@@ -1087,12 +1090,14 @@ impl<'p> I2CController<'p> {
     }
 
     /// Listen for i2c interactions targeting the specified addresses. The handler will be called
-    /// to handle the various transactions.
-    pub async fn listen(
+    /// to handle the various transactions. The listening can be stopped by setting the provided
+    /// watched value to true
+    pub async fn listen<const N: usize>(
         &mut self,
         addresses: &[u8],
         mut handler: impl FnMut(u8, ListenCommand),
-    ) -> Result<core::convert::Infallible, ListenError> {
+        stop: &mut watch::Receiver<'_, impl RawMutex, bool, N>,
+    ) -> Result<(), ListenError> {
         self.regs.smbn_ctl1().modify(|_, w| w.nminte().set_bit());
         if let Err(e) = self.configure_addresses(addresses) {
             self.regs.smbn_ctl1().modify(|_, w| w.nminte().clear_bit());
@@ -1100,16 +1105,35 @@ impl<'p> I2CController<'p> {
         }
 
         loop {
-            self.wait_for(|| {
-                if self.regs.smbn_st().read().nmatch().bit_is_set() {
-                    Some(())
-                } else {
-                    None
+            match select(
+                self.wait_for(|| {
+                    if self.regs.smbn_st().read().nmatch().bit_is_set() {
+                        Some(())
+                    } else {
+                        None
+                    }
+                }),
+                stop.get_and(|v| *v),
+            )
+            .await
+            {
+                embassy_futures::select::Either::First(_) => {
+                    // just continue the loop
                 }
-            })
-            .await;
+                embassy_futures::select::Either::Second(_) => {
+                    // cleanup the wait for interrupt
+                    self.regs.smbn_ctl1().modify(|_, w| w.inten().clear_bit());
 
-            // TODO: Implement some form of cancelling
+                    // disable listening
+                    self.disable_addresses();
+
+                    // Only stop if there is no pending transaction, otherwise handle those first
+                    if self.regs.smbn_st().read().nmatch().bit_is_clear() {
+                        self.regs.smbn_ctl1().modify(|_, w| w.nminte().clear_bit());
+                        return Ok(());
+                    }
+                }
+            }
 
             loop {
                 self.handle_listen_transaction(&mut handler).await;
