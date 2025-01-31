@@ -121,10 +121,23 @@ pub enum ListenError {
 #[derive(Debug, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum ListenCommand<'a> {
+    /// Part of a master's write has been received
     PartialWrite(&'a [u8]),
+    /// The final part of a master's write has been received
     WriteFinished(&'a [u8]),
+    /// Prepare a buffer for a read operation. Note, not
+    /// all bytes in the buffer may be read. Actions
+    /// that should happen once bytes have been read should
+    /// be done in ReadFinished.
     PrepareRead(&'a mut [u8]),
+    /// A read has been finished. Reports how many bytes were
+    /// read in total as part of the read.
     ReadFinished(usize),
+    /// A bus error occured. No action is needed, but gives
+    /// the handler a chance to report this. Always occurs with
+    /// address 0. The corresponding finished command for the
+    /// transaction will still be provided after the bus error.
+    BusError,
 }
 
 struct AnySMB {}
@@ -983,7 +996,7 @@ impl<'p> I2CController<'p> {
             };
 
             if st.ber().bit_is_set() {
-                // TODO: Deal with the error
+                handler(0, ListenCommand::BusError);
             }
 
             bytes_read -= self.regs.smbn_txf_sts().read().tx_bytes().bits() as usize;
@@ -993,6 +1006,7 @@ impl<'p> I2CController<'p> {
             // Reset so we can wait for the next transaction
             self.regs.smbn_txf_ctl().modify(|_, w| w.thr_txie().clear_bit());
             self.regs.smbn_fif_cts().write(|w| w.clr_fifo().set_bit());
+            // Clearing the ber bit is enough to handle the bus error.
             self.regs.smbn_st().write(|w| w.ber().set_bit().negack().set_bit());
         } else {
             // Write from master
@@ -1042,7 +1056,7 @@ impl<'p> I2CController<'p> {
             };
 
             if st.ber().bit_is_set() {
-                // TODO: Additional handling of the error
+                handler(0, ListenCommand::BusError);
             }
 
             // Read remaining bytes
@@ -1067,10 +1081,13 @@ impl<'p> I2CController<'p> {
             self.regs
                 .smbn_fif_cts()
                 .write(|w| w.clr_fifo().set_bit().slvrstr().set_bit());
+            // Clearing the Ber bit is enough to handle the bus error
             self.regs.smbn_st().write(|w| w.ber().set_bit());
         }
     }
 
+    /// Listen for i2c interactions targeting the specified addresses. The handler will be called
+    /// to handle the various transactions.
     pub async fn listen(
         &mut self,
         addresses: &[u8],
