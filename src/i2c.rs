@@ -548,13 +548,13 @@ impl<'p> I2CController<'p> {
                     .bits(group.len() as u8)
             });
         } else if data.len() <= (2 * FIFO_SIZE).into() {
-            (data, group) = data.split_at_mut(FIFO_SIZE as _);
+            (group, data) = data.split_at_mut(FIFO_SIZE as _);
             // Ensure we stall before the final group
             self.regs
                 .smbn_rxf_ctl()
                 .write(|w| unsafe { w.last_pec().clear_bit().thr_rxie().clear_bit().rx_thr().bits(FIFO_SIZE) });
         } else {
-            (data, group) = data.split_at_mut(GROUP_SIZE as _);
+            (group, data) = data.split_at_mut(GROUP_SIZE as _);
             // Can do bulk transfer without stalling
             self.regs
                 .smbn_rxf_ctl()
