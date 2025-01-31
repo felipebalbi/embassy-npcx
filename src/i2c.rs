@@ -463,6 +463,7 @@ impl<'p> I2CController<'p> {
         for b in (&mut data).take((FIFO_SIZE).into()) {
             self.regs.smbn_sda().write(|w| unsafe { w.bits(b) });
         }
+        self.regs.smbn_txf_sts().modify(|_, w| w.tx_thst().set_bit());
 
         while data.len() > 0 {
             // Wait for 8 bytes remaining in fifo
@@ -502,7 +503,9 @@ impl<'p> I2CController<'p> {
         }
 
         // Wait for completion
-        self.regs.smbn_txf_ctl().modify(|_, w| w.thr_txie().clear_bit());
+        self.regs
+            .smbn_txf_ctl()
+            .modify(|_, w| unsafe { w.thr_txie().clear_bit().tx_thr().bits(0) });
         let r = self
             .wait_for(|| {
                 let r = self.regs.smbn_st().read();
