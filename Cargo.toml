@@ -12,7 +12,7 @@ repository = "https://github.com/OpenDevicePartnership/embassy-npcx"
 rust-version = "1.80.0"
 
 [features]
-default = ["rt"]
+default = ["rt", "defmt"]
 defmt = ["dep:defmt"]
 rt = ["npcx490m-pac/rt", "dep:cortex-m-rt"]
 

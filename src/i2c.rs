@@ -14,6 +14,11 @@ const FIFO_SIZE: u8 = 32;
 // Number of bytes between refilling/emptying of the fifo
 const GROUP_SIZE: u8 = 24;
 
+/// SMBUS Broadcast address
+pub const GENERALCALL_ADDRESS: u8 = 0;
+/// SMBUS ARP address
+pub const ARP_ADDRESS: u8 = 0b1100001;
+
 pub struct InterruptHandler<T> {
     _phantom: PhantomData<T>,
 }
@@ -84,6 +89,7 @@ pub struct Config {
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Error {
     LostArbitration,
     BusError,
@@ -104,6 +110,21 @@ impl embedded_hal_async::i2c::Error for Error {
             }
         }
     }
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum ListenError {
+    InvalidAddressList,
+}
+
+#[derive(Debug, Eq, PartialEq, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum ListenCommand<'a> {
+    PartialWrite(&'a [u8]),
+    WriteFinished(&'a [u8]),
+    PrepareRead(&'a mut [u8]),
+    ReadFinished(usize),
 }
 
 struct AnySMB {}
@@ -772,6 +793,330 @@ impl<'p> I2CController<'p> {
     pub async fn write_read(&mut self, address: u8, write: &[u8], read: &mut [u8]) -> Result<(), Error> {
         self.transaction(address, &mut [Operation::Write(write), Operation::Read(read)])
             .await
+    }
+
+    fn configure_addresses(&mut self, addresses: &[u8]) -> Result<(), ListenError> {
+        let mut cnt = 0;
+        for (i, addr) in addresses.iter().copied().enumerate() {
+            if addr & 0x80 != 0 {
+                // Not 7 bit
+                return Err(ListenError::InvalidAddressList);
+            }
+            if addresses[..i].contains(&addr) {
+                // Disallow duplicate addresses
+                return Err(ListenError::InvalidAddressList);
+            }
+            // Don't count the addresses with special matching hardware
+            if addr != GENERALCALL_ADDRESS && addr != ARP_ADDRESS {
+                cnt += 1;
+            }
+        }
+        // Check we don't exceed capacity
+        if cnt > 8 {
+            return Err(ListenError::InvalidAddressList);
+        }
+
+        // Store the addresses in the address registers
+        let mut addr_reg_index = 0;
+        self.bank_sel(false);
+        for addr in addresses.iter().copied() {
+            if addr == ARP_ADDRESS {
+                self.regs.smbn_ctl3().modify(|_, w| w.arpmen().set_bit());
+            } else if addr == GENERALCALL_ADDRESS {
+                self.regs.smbn_ctl1().modify(|_, w| w.gcmen().set_bit());
+            } else {
+                // Unfortunately, the address registers are irregularly spaced in memory, so this match is needed
+                match addr_reg_index {
+                    0 => self
+                        .regs
+                        .smbn_addr1()
+                        .write(|w| unsafe { w.addr().bits(addr).saen().set_bit() }),
+                    1 => self
+                        .regs
+                        .smbn_addr2()
+                        .write(|w| unsafe { w.addr().bits(addr).saen().set_bit() }),
+                    2 => self
+                        .regs
+                        .smbn_addr3()
+                        .write(|w| unsafe { w.addr().bits(addr).saen().set_bit() }),
+                    3 => self
+                        .regs
+                        .smbn_addr4()
+                        .write(|w| unsafe { w.addr().bits(addr).saen().set_bit() }),
+                    4 => self
+                        .regs
+                        .smbn_addr5()
+                        .write(|w| unsafe { w.addr().bits(addr).saen().set_bit() }),
+                    5 => self
+                        .regs
+                        .smbn_addr6()
+                        .write(|w| unsafe { w.addr().bits(addr).saen().set_bit() }),
+                    6 => self
+                        .regs
+                        .smbn_addr7()
+                        .write(|w| unsafe { w.addr().bits(addr).saen().set_bit() }),
+                    7 => self
+                        .regs
+                        .smbn_addr8()
+                        .write(|w| unsafe { w.addr().bits(addr).saen().set_bit() }),
+                    _ => unreachable!("Incorrectly checked address list"),
+                };
+                addr_reg_index += 1;
+            }
+        }
+        self.bank_sel(true);
+
+        Ok(())
+    }
+
+    // TODO: Remove
+    #[allow(unused)]
+    fn disable_addresses(&mut self) {
+        self.bank_sel(false);
+        self.regs.smbn_ctl1().modify(|_, w| w.gcmen().clear_bit());
+        self.regs.smbn_ctl3().modify(|_, w| w.arpmen().clear_bit());
+        self.regs.smbn_addr1().write(|w| unsafe { w.bits(0) });
+        self.regs.smbn_addr2().write(|w| unsafe { w.bits(0) });
+        self.regs.smbn_addr3().write(|w| unsafe { w.bits(0) });
+        self.regs.smbn_addr4().write(|w| unsafe { w.bits(0) });
+        self.regs.smbn_addr5().write(|w| unsafe { w.bits(0) });
+        self.regs.smbn_addr6().write(|w| unsafe { w.bits(0) });
+        self.regs.smbn_addr7().write(|w| unsafe { w.bits(0) });
+        self.regs.smbn_addr8().write(|w| unsafe { w.bits(0) });
+        self.bank_sel(true);
+    }
+
+    fn decode_addr(&mut self) -> Option<u8> {
+        let r = self.regs.smbn_cst().read();
+        if r.gcmatch().bit_is_set() {
+            Some(GENERALCALL_ADDRESS)
+        } else if r.arpmatch().bit_is_set() {
+            Some(ARP_ADDRESS)
+        } else {
+            let r = self.regs.smbn_cst2().read();
+            if r.matcha1f().bit_is_set() {
+                Some(self.regs.smbn_addr1().read().addr().bits())
+            } else if r.matcha2f().bit_is_set() {
+                Some(self.regs.smbn_addr2().read().addr().bits())
+            } else if r.matcha3f().bit_is_set() {
+                self.bank_sel(false);
+                let a = self.regs.smbn_addr3().read();
+                self.bank_sel(true);
+                Some(a.addr().bits())
+            } else if r.matcha4f().bit_is_set() {
+                self.bank_sel(false);
+                let a = self.regs.smbn_addr4().read();
+                self.bank_sel(true);
+                Some(a.addr().bits())
+            } else if r.matcha5f().bit_is_set() {
+                self.bank_sel(false);
+                let a = self.regs.smbn_addr5().read();
+                self.bank_sel(true);
+                Some(a.addr().bits())
+            } else if r.matcha6f().bit_is_set() {
+                self.bank_sel(false);
+                let a = self.regs.smbn_addr6().read();
+                self.bank_sel(true);
+                Some(a.addr().bits())
+            } else if r.matcha7f().bit_is_set() {
+                self.bank_sel(false);
+                let a = self.regs.smbn_addr7().read();
+                self.bank_sel(true);
+                Some(a.addr().bits())
+            } else if self.regs.smbn_cst3().read().matcha8f().bit_is_set() {
+                self.bank_sel(false);
+                let a = self.regs.smbn_addr7().read();
+                self.bank_sel(true);
+                Some(a.addr().bits())
+            } else {
+                None
+            }
+        }
+    }
+
+    async fn handle_listen_transaction(&mut self, mut handler: impl FnMut(u8, ListenCommand)) {
+        let Some(addr) = self.decode_addr() else {
+            // Spurious nmatch, clear it and return
+            self.regs.smbn_st().write(|w| w.nmatch().set_bit());
+            return;
+        };
+
+        let mut buffer = [0u8; GROUP_SIZE as _];
+
+        if self.regs.smbn_st().read().xmit().bit_is_set() {
+            // Read from master
+            self.regs.smbn_st().write(|w| w.nmatch().set_bit());
+
+            let mut bytes_read = 0usize;
+
+            let st = loop {
+                handler(addr, ListenCommand::PrepareRead(&mut buffer));
+
+                for b in buffer {
+                    self.regs.smbn_sda().write(|w| unsafe { w.bits(b) });
+                }
+                self.regs
+                    .smbn_txf_ctl()
+                    .modify(|_, w| unsafe { w.tx_thr().bits(FIFO_SIZE - GROUP_SIZE).thr_txie().set_bit() });
+                self.regs.smbn_txf_sts().write(|w| w.tx_thst().set_bit());
+                bytes_read += GROUP_SIZE as usize;
+
+                let st = self
+                    .wait_for(|| {
+                        let st = self.regs.smbn_st().read();
+                        let txf_sts = self.regs.smbn_txf_sts().read();
+                        if txf_sts.tx_thst().bit_is_set()
+                            || st.ber().bit_is_set()
+                            || st.negack().bit_is_set()
+                            || st.sdast().bit_is_set()
+                        {
+                            Some(st)
+                        } else {
+                            None
+                        }
+                    })
+                    .await;
+
+                if st.ber().bit_is_set() || st.negack().bit_is_set() {
+                    break st;
+                }
+            };
+
+            if st.ber().bit_is_set() {
+                // TODO: Deal with the error
+            }
+
+            bytes_read -= self.regs.smbn_txf_sts().read().tx_bytes().bits() as usize;
+
+            handler(addr, ListenCommand::ReadFinished(bytes_read));
+
+            // Reset so we can wait for the next transaction
+            self.regs.smbn_txf_ctl().modify(|_, w| w.thr_txie().clear_bit());
+            self.regs.smbn_fif_cts().write(|w| w.clr_fifo().set_bit());
+            self.regs.smbn_st().write(|w| w.ber().set_bit().negack().set_bit());
+        } else {
+            // Write from master
+
+            // Start receiving bytes
+            // Note that we wait till we have 1 byte more than the group size to ensure slvrstr is always triggered when relevant
+            self.regs.smbn_rxf_ctl().write(|w| unsafe {
+                w.last_pec()
+                    .clear_bit()
+                    .thr_rxie()
+                    .set_bit()
+                    .rx_thr()
+                    .bits(GROUP_SIZE + 1)
+            });
+            self.regs.smbn_st().write(|w| w.nmatch().set_bit());
+
+            let st = loop {
+                let (st, fif_cts) = self
+                    .wait_for(|| {
+                        let st = self.regs.smbn_st().read();
+                        let rxf_sts = self.regs.smbn_rxf_sts().read();
+                        let fif_cts = self.regs.smbn_fif_cts().read();
+                        if st.ber().bit_is_set()
+                            || st.slvstp().bit_is_set()
+                            || st.sdast().bit_is_set()
+                            || rxf_sts.rx_thst().bit_is_set()
+                            || fif_cts.slvrstr().bit_is_set()
+                        {
+                            Some((st, fif_cts))
+                        } else {
+                            None
+                        }
+                    })
+                    .await;
+
+                if st.ber().bit_is_set() || st.slvstp().bit_is_set() || fif_cts.slvrstr().bit_is_set() {
+                    break st;
+                }
+
+                for b in buffer.iter_mut() {
+                    *b = self.regs.smbn_sda().read().bits();
+                }
+
+                self.regs.smbn_rxf_sts().write(|w| w.rx_thst().set_bit());
+
+                handler(addr, ListenCommand::PartialWrite(&buffer));
+            };
+
+            if st.ber().bit_is_set() {
+                // TODO: Additional handling of the error
+            }
+
+            // Read remaining bytes
+            let rest = self.regs.smbn_rxf_sts().read().rx_bytes().bits();
+            if rest > GROUP_SIZE {
+                for b in buffer.iter_mut() {
+                    *b = self.regs.smbn_sda().read().bits();
+                }
+
+                handler(addr, ListenCommand::WriteFinished(&buffer));
+            }
+
+            for b in buffer.iter_mut().take(rest.into()) {
+                *b = self.regs.smbn_sda().read().bits();
+            }
+
+            handler(addr, ListenCommand::WriteFinished(&buffer[..rest.into()]));
+
+            // Reset and prepare for next transaction
+            // Note that we leave slvstp for the caller to deal with
+            self.regs.smbn_rxf_ctl().write(|w| w.thr_rxie().clear_bit());
+            self.regs
+                .smbn_fif_cts()
+                .write(|w| w.clr_fifo().set_bit().slvrstr().set_bit());
+            self.regs.smbn_st().write(|w| w.ber().set_bit());
+        }
+    }
+
+    pub async fn listen(
+        &mut self,
+        addresses: &[u8],
+        mut handler: impl FnMut(u8, ListenCommand),
+    ) -> Result<core::convert::Infallible, ListenError> {
+        self.regs.smbn_ctl1().modify(|_, w| w.nminte().set_bit());
+        if let Err(e) = self.configure_addresses(addresses) {
+            self.regs.smbn_ctl1().modify(|_, w| w.nminte().clear_bit());
+            return Err(e);
+        }
+
+        loop {
+            self.wait_for(|| {
+                if self.regs.smbn_st().read().nmatch().bit_is_set() {
+                    Some(())
+                } else {
+                    None
+                }
+            })
+            .await;
+
+            // TODO: Implement some form of cancelling
+
+            loop {
+                self.handle_listen_transaction(&mut handler).await;
+
+                // wait for slvstp or a new match
+                let st = self
+                    .wait_for(|| {
+                        let st = self.regs.smbn_st().read();
+                        if st.nmatch().bit_is_set() || st.slvstp().bit_is_set() {
+                            Some(st)
+                        } else {
+                            None
+                        }
+                    })
+                    .await;
+
+                if st.slvstp().bit_is_set() {
+                    break;
+                }
+            }
+
+            // clear the slave stop
+            self.regs.smbn_st().write(|w| w.slvstp().set_bit());
+        }
     }
 }
 
