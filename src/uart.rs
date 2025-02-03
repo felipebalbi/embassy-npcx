@@ -58,20 +58,11 @@ impl Default for Config {
 
 /// "Common Mode" configuration for the Core Uart peripheral.
 #[non_exhaustive]
+#[derive(Default)]
 pub struct CommonModeConfig {
     pub base: Config,
     pub push_pull: bool,
     pub feedback: bool,
-}
-
-impl Default for CommonModeConfig {
-    fn default() -> Self {
-        Self {
-            base: Config::default(),
-            push_pull: false,
-            feedback: false,
-        }
-    }
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -367,7 +358,7 @@ impl<'a> UartRx<'a> {
     }
 }
 
-fn drop_rx_tx<'a>(dev: &PeripheralRef<'a, AnyUart>) {
+fn drop_rx_tx(dev: &PeripheralRef<'_, AnyUart>) {
     if dev.state.rx_tx_refcount.fetch_sub(1, Ordering::AcqRel) == 1 {
         // We need to clean up.
 
@@ -376,7 +367,7 @@ fn drop_rx_tx<'a>(dev: &PeripheralRef<'a, AnyUart>) {
     }
 }
 
-impl<'a> Drop for UartRx<'a> {
+impl Drop for UartRx<'_> {
     fn drop(&mut self) {
         drop_rx_tx(&self.dev);
     }
@@ -389,7 +380,7 @@ impl<'a> UartTx<'a> {
     }
 }
 
-impl<'a> Drop for UartTx<'a> {
+impl Drop for UartTx<'_> {
     fn drop(&mut self) {
         drop_rx_tx(&self.dev);
     }
@@ -439,15 +430,15 @@ impl embedded_io_async::Error for Error {
     }
 }
 
-impl<'a> embedded_io_async::ErrorType for UartRx<'a> {
+impl embedded_io_async::ErrorType for UartRx<'_> {
     type Error = Error;
 }
 
-impl<'a> embedded_io_async::ErrorType for UartTx<'a> {
+impl embedded_io_async::ErrorType for UartTx<'_> {
     type Error = Infallible;
 }
 
-impl<'a> embedded_io_async::Read for UartRx<'a> {
+impl embedded_io_async::Read for UartRx<'_> {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
         let r = self.dev.regs;
 
@@ -499,7 +490,7 @@ impl<'a> embedded_io_async::Read for UartRx<'a> {
     }
 }
 
-impl<'a> embedded_io_async::Write for UartTx<'a> {
+impl embedded_io_async::Write for UartTx<'_> {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
         let r = self.dev.regs;
 
