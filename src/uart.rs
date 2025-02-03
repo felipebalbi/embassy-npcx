@@ -398,30 +398,21 @@ impl<T: Instance> crate::interrupt::typelevel::Handler<T::Interrupt> for Interru
         if r.ufrctln().read().rfifo_nempty_en().bit_is_set() {
             let rsts = r.ufrstsn().read();
             if rsts.rfifo_nempty_sts().bit_is_set() || rsts.err().bit_is_set() {
-                // Note(cs): register is also modified in async task.
-                critical_section::with(|_| {
-                    r.ufrctln()
-                        .modify(|_, w| w.rfifo_nempty_en().clear_bit().err_en().clear_bit());
-                });
+                r.ufrctln()
+                    .modify(|_, w| w.rfifo_nempty_en().clear_bit().err_en().clear_bit());
                 T::rx_waker().wake();
             }
         }
 
         // If async task is awaiting for space in TX fifo, and space became available.
         if r.uftctln().read().tempty_level_en().bit_is_set() && r.uftstsn().read().tempty_level().bits() != 0 {
-            // Note(cs): register is also modified in async task.
-            critical_section::with(|_| {
-                r.uftctln().modify(|_, w| w.tempty_level_en().set_bit());
-            });
+            r.uftctln().modify(|_, w| w.tempty_level_en().set_bit());
             T::tx_waker().wake();
         }
 
         // If async task is awaiting for transmission to be completed.
         if r.uftctln().read().nxmip_en().bit_is_set() && r.uftstsn().read().nxmip().bit_is_set() {
-            // Note(cs): register is also modified in async task.
-            critical_section::with(|_| {
-                r.uftctln().modify(|_, w| w.nxmip_en().clear_bit());
-            });
+            r.uftctln().modify(|_, w| w.nxmip_en().clear_bit());
             T::tx_waker().wake();
         }
     }
