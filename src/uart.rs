@@ -6,11 +6,11 @@
 //! Does not (yet) support DMA transactions.
 
 use crate::interrupt::typelevel::Interrupt;
+use core::convert::Infallible;
 use core::future::poll_fn;
 use core::marker::PhantomData;
 use core::sync::atomic::{AtomicU8, Ordering};
 use core::task::Poll;
-use core::{future::Future, sync::atomic::AtomicBool};
 use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
 use embassy_sync::waitqueue::AtomicWaker;
 
@@ -196,8 +196,8 @@ impl<'a> Uart<'a> {
             w.stp().bit(config.stop_bits == StopBits::STOP2)
         });
 
-        // Enable receive error interrupts.
-        r.ufrctln().modify(|_, w| w.err_en().set_bit());
+        // Set TX FIFO watermark level to 1.
+        r.uftctln().modify(|_, w| unsafe { w.tempty_level_sel().bits(0x01) });
 
         // Safety: UART can only be initialized after the clocks have been initialized.
         let srcclk = unsafe { crate::cdcg::get_clocks() }.apb4_clk;
@@ -416,7 +416,14 @@ impl<T: Instance> crate::interrupt::typelevel::Handler<T::Interrupt> for Interru
             }
         }
 
-        // TODO writing
+        // If async task is awaiting for space in TX fifo, and space became available.
+        if r.uftctln().read().tempty_level_en().bit_is_set() && r.uftstsn().read().tempty_level().bits() != 0 {
+            // Note(cs): register is also modified in interrupt handler.
+            critical_section::with(|_| {
+                r.uftctln().modify(|_, w| w.tempty_level_en().set_bit());
+            });
+            T::tx_waker().wake();
+        }
     }
 }
 
@@ -437,7 +444,7 @@ impl<'a> embedded_io_async::ErrorType for UartRx<'a> {
 }
 
 impl<'a> embedded_io_async::ErrorType for UartTx<'a> {
-    type Error = Error;
+    type Error = Infallible;
 }
 
 impl<'a> embedded_io_async::Read for UartRx<'a> {
@@ -494,7 +501,38 @@ impl<'a> embedded_io_async::Read for UartRx<'a> {
 
 impl<'a> embedded_io_async::Write for UartTx<'a> {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
-        todo!()
+        let r = self.dev.regs;
+
+        // Await until space in the FIFO buffer.
+        if r.uftstsn().read().tempty_level().bits() == 0 {
+            // Note(cs): register is also modified in interrupt handler.
+            critical_section::with(|_| {
+                // Note: in configure we set watermark level to at least 1 byte.
+                r.uftctln().modify(|_, w| w.tempty_level_en().set_bit());
+            });
+
+            poll_fn(|cx| {
+                self.dev.tx_waker.register(cx.waker());
+                if r.uftstsn().read().tempty_level().bits() != 0 {
+                    Poll::Ready(())
+                } else {
+                    Poll::Pending
+                }
+            })
+            .await;
+        }
+
+        // Write until FIFO is full.
+        let mut c = 0;
+        for b in buf {
+            if r.uftstsn().read().tempty_level().bits() == 0 {
+                break;
+            }
+            r.utbufn().write(|w| unsafe { w.bits(*b) });
+            c += 1;
+        }
+
+        Ok(c)
     }
 }
 
