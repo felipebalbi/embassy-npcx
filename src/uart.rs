@@ -409,9 +409,18 @@ impl<T: Instance> crate::interrupt::typelevel::Handler<T::Interrupt> for Interru
 
         // If async task is awaiting for space in TX fifo, and space became available.
         if r.uftctln().read().tempty_level_en().bit_is_set() && r.uftstsn().read().tempty_level().bits() != 0 {
-            // Note(cs): register is also modified in interrupt handler.
+            // Note(cs): register is also modified in async task.
             critical_section::with(|_| {
                 r.uftctln().modify(|_, w| w.tempty_level_en().set_bit());
+            });
+            T::tx_waker().wake();
+        }
+
+        // If async task is awaiting for transmission to be completed.
+        if r.uftctln().read().nxmip_en().bit_is_set() && r.uftstsn().read().nxmip().bit_is_set() {
+            // Note(cs): register is also modified in async task.
+            critical_section::with(|_| {
+                r.uftctln().modify(|_, w| w.nxmip_en().clear_bit());
             });
             T::tx_waker().wake();
         }
@@ -524,6 +533,30 @@ impl embedded_io_async::Write for UartTx<'_> {
         }
 
         Ok(c)
+    }
+
+    async fn flush(&mut self) -> Result<(), Self::Error> {
+        let r = self.dev.regs;
+
+        // Await until the driver has transmitted all bits.
+        if r.uftstsn().read().nxmip().bit_is_clear() {
+            // Note(cs): register is also modified in interrupt handler.
+            critical_section::with(|_| {
+                r.uftctln().modify(|_, w| w.nxmip_en().set_bit());
+            });
+
+            poll_fn(|cx| {
+                self.dev.tx_waker.register(cx.waker());
+                if r.uftstsn().read().nxmip().bit_is_set() {
+                    Poll::Ready(())
+                } else {
+                    Poll::Pending
+                }
+            })
+            .await;
+        }
+
+        Ok(())
     }
 }
 
