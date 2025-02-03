@@ -6,8 +6,10 @@
 //! Does not (yet) support DMA transactions.
 
 use crate::interrupt::typelevel::Interrupt;
+use core::future::poll_fn;
 use core::marker::PhantomData;
 use core::sync::atomic::{AtomicU8, Ordering};
+use core::task::Poll;
 use core::{future::Future, sync::atomic::AtomicBool};
 use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
 use embassy_sync::waitqueue::AtomicWaker;
@@ -82,7 +84,8 @@ pub enum Error {
 
 struct AnyUart {
     regs: &'static crate::pac::cr_uart1::RegisterBlock,
-    waker: &'static AtomicWaker,
+    rx_waker: &'static AtomicWaker,
+    tx_waker: &'static AtomicWaker,
     state: &'static State,
 }
 
@@ -90,7 +93,8 @@ impl<T: Instance> From<T> for AnyUart {
     fn from(_uart: T) -> Self {
         AnyUart {
             regs: T::regs(),
-            waker: T::waker(),
+            rx_waker: T::rx_waker(),
+            tx_waker: T::tx_waker(),
             state: T::state(),
         }
     }
@@ -103,7 +107,8 @@ impl Peripheral for AnyUart {
     unsafe fn clone_unchecked(&self) -> Self::P {
         AnyUart {
             regs: self.regs,
-            waker: self.waker,
+            rx_waker: self.rx_waker,
+            tx_waker: self.tx_waker,
             state: self.state,
         }
     }
@@ -396,10 +401,22 @@ pub struct InterruptHandler<T> {
 
 impl<T: Instance> crate::interrupt::typelevel::Handler<T::Interrupt> for InterruptHandler<T> {
     unsafe fn on_interrupt() {
-        T::waker().wake();
-        critical_section::with(|_| {
-            // T::regs().ucntln().modify(|_, w| w.inten().clear_bit());
-        });
+        let r = T::regs();
+
+        // If async task is awaiting a byte to be available, and a byte is available or an error occurred.
+        if r.ufrctln().read().rfifo_nempty_en().bit_is_set() {
+            let rsts = r.ufrstsn().read();
+            if rsts.rfifo_nempty_sts().bit_is_set() || rsts.err().bit_is_set() {
+                // Note(cs): register is also modified in async task.
+                critical_section::with(|_| {
+                    r.ufrctln()
+                        .modify(|_, w| w.rfifo_nempty_en().clear_bit().err_en().clear_bit());
+                });
+                T::rx_waker().wake();
+            }
+        }
+
+        // TODO writing
     }
 }
 
@@ -425,7 +442,53 @@ impl<'a> embedded_io_async::ErrorType for UartTx<'a> {
 
 impl<'a> embedded_io_async::Read for UartRx<'a> {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        todo!()
+        let r = self.dev.regs;
+
+        // If we have no bytes pending, await until we have at least a single byte pending or error.
+        let rsts = r.ufrstsn().read();
+        if rsts.rfifo_nempty_sts().bit_is_clear() && rsts.err().bit_is_clear() {
+            // Note(cs): register is also modified in interrupt handler.
+            critical_section::with(|_| {
+                r.ufrctln()
+                    .modify(|_, w| w.rfifo_nempty_en().set_bit().err_en().set_bit());
+            });
+
+            poll_fn(|cx| {
+                self.dev.rx_waker.register(cx.waker());
+
+                let rsts = r.ufrstsn().read();
+                if rsts.rfifo_nempty_sts().bit_is_set() || rsts.err().bit_is_set() {
+                    Poll::Ready(())
+                } else {
+                    Poll::Pending
+                }
+            })
+            .await;
+        }
+
+        // Note: clears ustat bits when read.
+        let ustat = r.ustatn().read();
+        if ustat.bkd().bit_is_set() {
+            return Err(Error::Break);
+        } else if ustat.doe().bit_is_set() {
+            return Err(Error::DataOverrun);
+        } else if ustat.fe().bit_is_set() {
+            return Err(Error::Framing);
+        } else if ustat.pe().bit_is_set() {
+            return Err(Error::Parity);
+        }
+
+        // When we have no error and pending bytes from the fifo, copy them to the output buffer and return.
+        let mut c = 0;
+        for b in buf {
+            if r.ufrstsn().read().rfifo_nempty_sts().bit_is_clear() {
+                break;
+            }
+            *b = r.urbufn().read().bits();
+            c += 1;
+        }
+
+        Ok(c)
     }
 }
 
@@ -451,7 +514,8 @@ mod sealed {
     use embassy_sync::waitqueue::AtomicWaker;
 
     pub trait SealedInstance {
-        fn waker() -> &'static AtomicWaker;
+        fn rx_waker() -> &'static AtomicWaker;
+        fn tx_waker() -> &'static AtomicWaker;
         fn regs() -> &'static crate::pac::cr_uart1::RegisterBlock;
         fn state() -> &'static crate::uart::State;
 
@@ -480,7 +544,12 @@ pub trait OutputPin: sealed::SealedOutputPin {
 macro_rules! impl_instance {
     ($instance:ident, $pac:ident, $interrupt:ident, $reset_config:expr) => {
         impl sealed::SealedInstance for crate::peripherals::$instance {
-            fn waker() -> &'static AtomicWaker {
+            fn rx_waker() -> &'static AtomicWaker {
+                static WAKER: AtomicWaker = AtomicWaker::new();
+                &WAKER
+            }
+
+            fn tx_waker() -> &'static AtomicWaker {
                 static WAKER: AtomicWaker = AtomicWaker::new();
                 &WAKER
             }
