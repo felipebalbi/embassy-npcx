@@ -499,6 +499,12 @@ impl embedded_io_async::Read for UartRx<'_> {
     }
 }
 
+impl embedded_io_async::ReadReady for UartRx<'_> {
+    fn read_ready(&mut self) -> Result<bool, Self::Error> {
+        Ok(self.dev.regs.ufrstsn().read().rfifo_nempty_sts().bit_is_set())
+    }
+}
+
 impl embedded_io_async::Write for UartTx<'_> {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
         let r = self.dev.regs;
@@ -557,6 +563,12 @@ impl embedded_io_async::Write for UartTx<'_> {
         }
 
         Ok(())
+    }
+}
+
+impl embedded_io_async::WriteReady for UartTx<'_> {
+    fn write_ready(&mut self) -> Result<bool, Self::Error> {
+        Ok(self.dev.regs.uftstsn().read().tempty_level().bits() != 0)
     }
 }
 
