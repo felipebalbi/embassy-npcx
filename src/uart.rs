@@ -57,8 +57,9 @@ impl Default for Config {
 }
 
 /// "Common Mode" configuration for the Core Uart peripheral.
-#[non_exhaustive]
 #[derive(Default)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[non_exhaustive]
 pub struct CommonModeConfig {
     pub base: Config,
     pub push_pull: bool,
@@ -66,6 +67,7 @@ pub struct CommonModeConfig {
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Error {
     Break,
     DataOverrun,
@@ -118,6 +120,7 @@ pub struct Uart<'a> {
 /// BR = SRC / (16 x div x p)
 /// (div x p) = SRC / (16 * BR)
 /// ```
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 struct ClockConfiguration {
     // Divisor value
     div: u16,
@@ -129,14 +132,17 @@ impl ClockConfiguration {
     pub fn generate_valid(srcclk: u32, desired_baudrate: u32) -> impl Iterator<Item = Self> {
         let dstclk2 = (srcclk * 2) / 16 / desired_baudrate;
 
-        (2..=32).filter_map(move |p2| {
-            let div = dstclk2 / p2 as u32;
-            if div > 0 && div <= 0x800 {
-                Some(ClockConfiguration { div: div as u16, p2 })
-            } else {
-                None
-            }
-        })
+        (2..=32)
+            .flat_map(move |p2| {
+                let div_a = dstclk2.div_ceil(p2 as u32);
+                let div_b = dstclk2 / p2 as u32;
+                [
+                    ClockConfiguration { div: div_a as u16, p2 },
+                    ClockConfiguration { div: div_b as u16, p2 },
+                ]
+                .into_iter()
+            })
+            .filter(|clkcfg| clkcfg.div > 0 && clkcfg.div <= 0x800)
     }
 
     // Compute the UDIV10_0 register field value.
@@ -197,6 +203,18 @@ impl<'a> Uart<'a> {
             // Minimize baudrate error.
             .min_by_key(move |cfg| cfg.baudrate(srcclk).abs_diff(config.baudrate))
             .expect("Failed to find clock configuration for requested baudrate");
+
+        #[cfg(feature = "defmt")]
+        {
+            let eff = clkcfg.baudrate(srcclk);
+            defmt::debug!(
+                "uart: {}, target: {}, eff:{}, diff:{}",
+                clkcfg,
+                config.baudrate,
+                eff,
+                eff as i64 - config.baudrate as i64
+            );
+        }
 
         r.ubaudn().write(|w| unsafe { w.bits((clkcfg.udiv10() & 0xff) as u8) });
         // Setting the prescaler to non-zero also enables the peripheral.
@@ -406,7 +424,7 @@ impl<T: Instance> crate::interrupt::typelevel::Handler<T::Interrupt> for Interru
 
         // If async task is awaiting for space in TX fifo, and space became available.
         if r.uftctln().read().tempty_level_en().bit_is_set() && r.uftstsn().read().tempty_level().bits() != 0 {
-            r.uftctln().modify(|_, w| w.tempty_level_en().set_bit());
+            r.uftctln().modify(|_, w| w.tempty_level_en().clear_bit());
             T::tx_waker().wake();
         }
 
