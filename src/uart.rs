@@ -108,7 +108,8 @@ impl Peripheral for AnyUart {
 }
 
 /// Core Universal Asynchronous Receiver-Transmitter (CR_UART) driver.
-pub struct Uart<'a> {
+pub struct Uart<'a, T> {
+    peripheral: PhantomData<T>,
     rx: UartRx<'a>,
     tx: UartTx<'a>,
 }
@@ -162,9 +163,9 @@ impl ClockConfiguration {
     }
 }
 
-impl<'a> Uart<'a> {
+impl<'a, T: Instance + 'a> Uart<'a, T> {
     /// Configure the base registers for the peripheral and enables it.
-    fn configure_enable<T: Instance + 'a>(_peri: &(impl Peripheral<P = T> + 'a), config: Config) {
+    fn configure_enable(config: Config) {
         // Safety: _irqs ensures an interrupt handler is bound
         unsafe {
             T::Interrupt::enable();
@@ -227,12 +228,12 @@ impl<'a> Uart<'a> {
     }
 
     /// Configure the base registers and general common mode registers for the peripheral, and enables it.
-    fn configure_common_mode_enable<T: Instance + 'a>(peri: &(impl Peripheral<P = T> + 'a), config: CommonModeConfig) {
+    fn configure_common_mode_enable(config: CommonModeConfig) {
         T::regs().ucntln().modify(|_, w| w.com_fdbk_en().bit(config.feedback));
-        Self::configure_enable(peri, config.base);
+        Self::configure_enable(config.base);
     }
 
-    fn instantiate_rx_tx<T: Instance + 'a>(peri: impl Peripheral<P = T> + 'a) -> Self {
+    fn instantiate_rx_tx(peri: impl Peripheral<P = T> + 'a) -> Self {
         into_ref!(peri);
         let peri: PeripheralRef<'_, AnyUart> = peri.map_into();
 
@@ -240,11 +241,12 @@ impl<'a> Uart<'a> {
         Self {
             rx: UartRx::<'a>::new(unsafe { peri.clone_unchecked() }),
             tx: UartTx::<'a>::new(peri),
+            peripheral: Default::default(),
         }
     }
 
     /// Enables the peripheral in "Separate Mode" with applicable input and output pins.
-    pub fn new<T: Instance + 'a, Sin: InputPin, Sout: OutputPin>(
+    pub fn new<Sin: InputPin, Sout: OutputPin>(
         peri: impl Peripheral<P = T> + 'a,
         _sin: impl Peripheral<P = Sin> + 'a,
         _sout: impl Peripheral<P = Sout> + 'a,
@@ -261,12 +263,12 @@ impl<'a> Uart<'a> {
             };
         });
 
-        Self::configure_enable(&peri, config);
+        Self::configure_enable(config);
         Self::instantiate_rx_tx(peri)
     }
 
     /// Enables the peripheral in "Separate Mode" with applicable input pin.
-    pub fn new_rx<T: Instance + 'a, Sin: InputPin>(
+    pub fn new_rx<Sin: InputPin>(
         peri: impl Peripheral<P = T> + 'a,
         _sin: impl Peripheral<P = Sin> + 'a,
         _irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>,
@@ -281,14 +283,14 @@ impl<'a> Uart<'a> {
             };
         });
 
-        Self::configure_enable(&peri, config);
+        Self::configure_enable(config);
 
         into_ref!(peri);
         UartRx::new(peri.map_into())
     }
 
     /// Enables the peripheral in "Separate Mode" with applicable output pin.
-    pub fn new_tx<T: Instance + 'a, Sout: OutputPin>(
+    pub fn new_tx<Sout: OutputPin>(
         peri: impl Peripheral<P = T> + 'a,
         _sout: impl Peripheral<P = Sout> + 'a,
         _irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>,
@@ -303,14 +305,14 @@ impl<'a> Uart<'a> {
             };
         });
 
-        Self::configure_enable(&peri, config);
+        Self::configure_enable(config);
 
         into_ref!(peri);
         UartTx::new(peri.map_into())
     }
 
     /// Enables the peripheral in "Common Mode" by using an applicable input pin as both input and output.
-    pub fn new_common_input<T: Instance + 'a, Sin: InputPin>(
+    pub fn new_common_input<Sin: InputPin>(
         peri: impl Peripheral<P = T> + 'a,
         _sin: impl Peripheral<P = Sin> + 'a,
         _irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>,
@@ -328,12 +330,12 @@ impl<'a> Uart<'a> {
         T::regs()
             .ucntln()
             .modify(|_, w| w.cr_sin_com().set_bit().cr_sin_pp().bit(config.push_pull));
-        Self::configure_common_mode_enable(&peri, config);
+        Self::configure_common_mode_enable(config);
         Self::instantiate_rx_tx(peri)
     }
 
     /// Enables the peripheral in "Common Mode" by using an applicable output pin as both input and output.
-    pub fn new_common_output<T: Instance + 'a, Sout: OutputPin>(
+    pub fn new_common_output<Sout: OutputPin>(
         peri: impl Peripheral<P = T> + 'a,
         _sout: impl Peripheral<P = Sout> + 'a,
         _irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>,
@@ -352,7 +354,7 @@ impl<'a> Uart<'a> {
             .ucntln()
             .modify(|_, w| w.cr_sout_com().set_bit().cr_sout_pp().bit(config.push_pull));
 
-        Self::configure_common_mode_enable(&peri, config);
+        Self::configure_common_mode_enable(config);
         Self::instantiate_rx_tx(peri)
     }
 
