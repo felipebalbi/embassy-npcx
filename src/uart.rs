@@ -130,6 +130,20 @@ struct ClockConfiguration {
 }
 
 impl ClockConfiguration {
+    pub fn from_registers(r: &crate::pac::cr_uart1::RegisterBlock) -> Self {
+        let upsrn = r.upsrn().read();
+
+        let udiv10_l = r.ubaudn().read().bits() as u16;
+        let udiv10_h = upsrn.udiv10_8().bits() as u16;
+        let udiv10 = udiv10_h << 8 | udiv10_l;
+        let upsc = upsrn.upsc().bits();
+
+        Self {
+            div: udiv10 + 1,
+            p2: upsc + 1,
+        }
+    }
+
     pub fn generate_valid(srcclk: u32, desired_baudrate: u32) -> impl Iterator<Item = Self> {
         let dstclk2 = (srcclk * 2) / 16 / desired_baudrate;
 
@@ -244,6 +258,13 @@ impl<'a, T: Instance + 'a> Uart<'a, T> {
             tx: UartTx::<'a>::new(peri),
             peripheral: Default::default(),
         }
+    }
+
+    /// Compute the effective baudrate.
+    pub fn baudrate(&self) -> u32 {
+        let clkcfg = ClockConfiguration::from_registers(T::regs());
+        let srcclk = unsafe { crate::cdcg::get_clocks() }.apb4_clk;
+        clkcfg.baudrate(srcclk)
     }
 
     /// Enables the peripheral in "Separate Mode" with applicable input and output pins.
