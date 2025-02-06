@@ -126,8 +126,8 @@ pub enum ListenError {
 pub enum ListenCommand<'a> {
     /// Part of a master's write has been received
     PartialWrite(&'a [u8]),
-    /// The final part of a master's write has been received
-    WriteFinished(&'a [u8]),
+    /// The master's write has been completed.
+    WriteFinished,
     /// Prepare a buffer for a read operation. Note, not
     /// all bytes in the buffer may be read. Actions
     /// that should happen once bytes have been read should
@@ -1067,14 +1067,16 @@ impl<'p> I2CController<'p> {
                     *b = self.regs.smbn_sda().read().bits();
                 }
 
-                handler(addr, ListenCommand::WriteFinished(&buffer));
+                handler(addr, ListenCommand::PartialWrite(&buffer));
+                handler(addr, ListenCommand::WriteFinished);
             }
 
             for b in buffer.iter_mut().take(rest.into()) {
                 *b = self.regs.smbn_sda().read().bits();
             }
 
-            handler(addr, ListenCommand::WriteFinished(&buffer[..rest.into()]));
+            handler(addr, ListenCommand::PartialWrite(&buffer[..rest.into()]));
+            handler(addr, ListenCommand::WriteFinished);
 
             // Reset and prepare for next transaction
             // Note that we leave slvstp for the caller to deal with
