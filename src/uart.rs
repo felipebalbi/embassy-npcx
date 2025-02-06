@@ -334,9 +334,9 @@ impl<'a, T: Instance + 'a> Uart<'a, T> {
     }
 
     /// Enables the peripheral in "Common Mode" by using an applicable input pin as both input and output.
-    pub fn new_common_input<Sin: InputPin>(
+    pub fn new_common<Scom: CommonPin>(
         peri: impl Peripheral<P = T> + 'a,
-        _sin: impl Peripheral<P = Sin> + 'a,
+        _scom: impl Peripheral<P = Scom> + 'a,
         _irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>,
         config: CommonModeConfig,
     ) -> Self {
@@ -345,37 +345,11 @@ impl<'a, T: Instance + 'a> Uart<'a, T> {
             // Safety: We have exclusive ownership over the peripherals.
             unsafe {
                 T::reset(cs);
-                Sin::setup(cs)
+                Scom::setup(cs);
             };
         });
 
-        T::regs()
-            .ucntln()
-            .modify(|_, w| w.cr_sin_com().set_bit().cr_sin_pp().bit(config.push_pull));
-        Self::configure_common_mode_enable(config);
-        Self::instantiate_rx_tx(peri)
-    }
-
-    /// Enables the peripheral in "Common Mode" by using an applicable output pin as both input and output.
-    pub fn new_common_output<Sout: OutputPin>(
-        peri: impl Peripheral<P = T> + 'a,
-        _sout: impl Peripheral<P = Sout> + 'a,
-        _irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>,
-        config: CommonModeConfig,
-    ) -> Self {
-        // Note(cs): other peripherals might also be modifying swsrst* at the same time.
-        critical_section::with(|cs| {
-            // Safety: We have exclusive ownership over the peripherals.
-            unsafe {
-                T::reset(cs);
-                Sout::setup(cs)
-            };
-        });
-
-        T::regs()
-            .ucntln()
-            .modify(|_, w| w.cr_sout_com().set_bit().cr_sout_pp().bit(config.push_pull));
-
+        Scom::configure_for_common::<T>(config.push_pull);
         Self::configure_common_mode_enable(config);
         Self::instantiate_rx_tx(peri)
     }
@@ -629,12 +603,15 @@ mod sealed {
         unsafe fn reset(cs: critical_section::CriticalSection);
     }
 
-    pub trait SealedConfigurablePin {
+    pub trait SealedPin {
         unsafe fn setup(cs: critical_section::CriticalSection);
     }
 
-    pub trait SealedInputPin: SealedConfigurablePin {}
-    pub trait SealedOutputPin: SealedConfigurablePin {}
+    pub trait SealedInputPin: SealedPin {}
+    pub trait SealedOutputPin: SealedPin {}
+    pub trait SealedCommonPin: SealedPin {
+        fn configure_for_common<T: SealedInstance>(push_pull: bool);
+    }
 }
 
 pub trait Instance: sealed::SealedInstance + embassy_hal_internal::Peripheral<P = Self> {
@@ -645,6 +622,10 @@ pub trait InputPin: sealed::SealedInputPin {
     type Instance: Instance;
 }
 pub trait OutputPin: sealed::SealedOutputPin {
+    type Instance: Instance;
+}
+
+pub trait CommonPin: sealed::SealedCommonPin {
     type Instance: Instance;
 }
 
@@ -689,7 +670,7 @@ macro_rules! impl_instance {
 
 macro_rules! impl_pin {
     ($instance:ident, $pin:ident, $pin_config:expr) => {
-        impl sealed::SealedConfigurablePin for crate::peripherals::$pin {
+        impl sealed::SealedPin for crate::peripherals::$pin {
             unsafe fn setup(_cs: critical_section::CriticalSection) {
                 fn internal_set(f: impl FnOnce(crate::pac::Sysconfig, crate::pac::Sysglue)) {
                     f(unsafe { crate::pac::Sysconfig::steal() }, unsafe {
@@ -706,7 +687,17 @@ macro_rules! impl_pin_input {
     ($instance:ident, $pin:ident, $pin_config:expr) => {
         impl_pin!($instance, $pin, $pin_config);
         impl sealed::SealedInputPin for crate::peripherals::$pin {}
+        impl sealed::SealedCommonPin for crate::peripherals::$pin {
+            fn configure_for_common<T: sealed::SealedInstance>(push_pull: bool) {
+                T::regs()
+                    .ucntln()
+                    .modify(|_, w| w.cr_sin_com().set_bit().cr_sin_pp().bit(push_pull));
+            }
+        }
         impl InputPin for crate::peripherals::$pin {
+            type Instance = crate::peripherals::$instance;
+        }
+        impl CommonPin for crate::peripherals::$pin {
             type Instance = crate::peripherals::$instance;
         }
     };
@@ -716,7 +707,17 @@ macro_rules! impl_pin_output {
     ($instance:ident, $pin:ident, $pin_config:expr) => {
         impl_pin!($instance, $pin, $pin_config);
         impl sealed::SealedOutputPin for crate::peripherals::$pin {}
+        impl sealed::SealedCommonPin for crate::peripherals::$pin {
+            fn configure_for_common<T: sealed::SealedInstance>(push_pull: bool) {
+                T::regs()
+                    .ucntln()
+                    .modify(|_, w| w.cr_sout_com().set_bit().cr_sout_pp().bit(push_pull));
+            }
+        }
         impl OutputPin for crate::peripherals::$pin {
+            type Instance = crate::peripherals::$instance;
+        }
+        impl CommonPin for crate::peripherals::$pin {
             type Instance = crate::peripherals::$instance;
         }
     };
