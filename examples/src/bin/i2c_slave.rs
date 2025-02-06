@@ -50,23 +50,7 @@ async fn device(mut i2c: I2CController<'static>) {
                     cur_addr = cur_addr.wrapping_add(1);
                 }
             }
-            ListenCommand::WriteFinished(items) => {
-                let data = if !in_transaction {
-                    if let Some((addr, data)) = items.split_first() {
-                        cur_addr = *addr;
-                        data
-                    } else {
-                        &[]
-                    }
-                } else {
-                    items
-                };
-
-                for b in data.iter().copied() {
-                    flash_data[cur_addr as usize] = b;
-                    cur_addr = cur_addr.wrapping_add(1);
-                }
-
+            ListenCommand::WriteFinished => {
                 in_transaction = false;
             }
             ListenCommand::PrepareRead(items) => {
