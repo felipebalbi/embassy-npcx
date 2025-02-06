@@ -137,6 +137,7 @@ impl ClockConfiguration {
             .flat_map(move |p2| {
                 let div_a = dstclk2.div_ceil(p2 as u32);
                 let div_b = dstclk2 / p2 as u32;
+                // Note(cast to u16): if overflow will pin to 0xffff, which will be filtered later on.
                 [
                     ClockConfiguration { div: div_a as u16, p2 },
                     ClockConfiguration { div: div_b as u16, p2 },
