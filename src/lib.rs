@@ -1,5 +1,6 @@
 #![no_std]
 
+pub mod cancellation;
 pub mod cdcg;
 pub mod gpio;
 pub mod gpio_miwu;

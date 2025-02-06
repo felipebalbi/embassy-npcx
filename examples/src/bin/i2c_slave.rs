@@ -2,12 +2,12 @@
 #![no_std]
 
 use embassy_executor::Spawner;
+use embassy_npcx::cancellation::CancellationToken;
 use embassy_npcx::cdcg::VoscClockMode;
 use embassy_npcx::i2c::{self, I2CController, ListenCommand};
 use embassy_npcx::{bind_interrupts, peripherals, Config};
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::signal::Signal;
-use embassy_sync::watch::Watch;
 use embedded_hal::i2c::Operation;
 use {defmt_rtt as _, panic_probe as _};
 
@@ -25,8 +25,7 @@ async fn device(mut i2c: I2CController<'static>) {
     let mut read_addr = 0u8;
     let mut in_transaction = false;
 
-    let stopwatch: Watch<ThreadModeRawMutex, bool, 1> = Watch::new_with(false);
-    let mut stop = stopwatch.receiver().unwrap();
+    let cancellation_token = CancellationToken::new();
 
     SIG.signal(());
     i2c.listen(
@@ -71,7 +70,7 @@ async fn device(mut i2c: I2CController<'static>) {
                 defmt::info!("A bus error occured");
             }
         },
-        &mut stop,
+        &cancellation_token,
     )
     .await
     .unwrap();
