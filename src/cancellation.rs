@@ -29,7 +29,7 @@ impl CancellationToken {
     }
 
     /// Wait for cancel being called
-    pub(crate) async fn wait_for_cancel(&self) {
+    pub async fn wait_for_cancel(&self) {
         let _ = self.waiters.wait_for_value(|| self.is_cancelled().then_some(())).await;
     }
 }
