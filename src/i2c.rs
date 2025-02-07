@@ -1,13 +1,14 @@
+//! Implementation of the I2C peripheral
+
 use core::future::Future;
 use core::marker::PhantomData;
 
 use embassy_futures::select::select;
 use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
-use embassy_sync::blocking_mutex::raw::RawMutex;
 use embassy_sync::waitqueue::AtomicWaker;
-use embassy_sync::watch;
 pub use embedded_hal_async::i2c::{I2c, Operation};
 
+use crate::cancellation::CancellationToken;
 use crate::cdcg::get_clocks;
 use crate::gpio::Pin;
 use crate::interrupt::typelevel::Interrupt;
@@ -22,6 +23,7 @@ pub const GENERALCALL_ADDRESS: u8 = 0;
 /// SMBUS ARP address
 pub const ARP_ADDRESS: u8 = 0b1100001;
 
+/// The interrupt handler for the [I2CController]
 pub struct InterruptHandler<T> {
     _phantom: PhantomData<T>,
 }
@@ -75,28 +77,40 @@ impl ReadCompletion<'_> {
     }
 }
 
+/// The speed of the I2C bus
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Speed {
+    /// 100 kbit/s
     #[default]
     Standard,
+    /// 400 kbit/s
     Fast,
+    /// 1 Mbit/s
     FastPlus,
 }
 
+/// Configuration for the I2C bus
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Config {
+    /// The target clock speed of the bus
     pub speed: Speed,
+    /// If true, the internal pullups are enabled
     pub pullup: bool,
 }
 
+/// Error type for the I2C operations
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Error {
+    /// A transaction couldn't be done because the bus was already busy and we had to give up
     LostArbitration,
+    /// Something went wrong on the bus
     BusError,
+    /// The address phase of the transaction nacked
     AddressNack,
+    /// The data phase of the transaction nacked
     DataNack,
 }
 
@@ -115,12 +129,15 @@ impl embedded_hal_async::i2c::Error for Error {
     }
 }
 
+/// Error type for [I2CController::listen]
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum ListenError {
+    /// The given list of addresses has something wrong with it
     InvalidAddressList,
 }
 
+/// Commands the user has to handle in the listen code
 #[derive(Debug, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum ListenCommand<'a> {
@@ -160,6 +177,7 @@ impl Peripheral for AnySMB {
     }
 }
 
+/// An instance of the I2C driver
 pub struct I2CController<'a> {
     _dev: PeripheralRef<'a, AnySMB>,
     regs: &'static crate::pac::smb0::RegisterBlock,
@@ -418,6 +436,7 @@ impl<'p> I2CController<'p> {
         }
     }
 
+    /// Create a new instance of I2C
     pub fn new<T: Instance + 'p, Scl: Pin, Sda: Pin, Mode>(
         peri: impl Peripheral<P = T> + 'p,
         scl: impl Peripheral<P = Scl> + 'p,
@@ -676,6 +695,7 @@ impl<'p> I2CController<'p> {
         Ok(ReadCompletion { regs: self.regs, group })
     }
 
+    /// Do a transaction. This uses the [embedded_hal_async::i2c::I2c::transaction] model.
     pub async fn transaction(&mut self, address: u8, operations: &mut [Operation<'_>]) -> Result<(), Error> {
         enum PrevOpType<'a> {
             None,
@@ -827,14 +847,17 @@ impl<'p> I2CController<'p> {
 
     // Functions below ensure you don't need the embedded_hal_async trait
 
+    /// Helper function. Mirror of [embedded_hal_async::i2c::I2c::read]
     pub async fn read(&mut self, address: u8, read: &mut [u8]) -> Result<(), Error> {
         self.transaction(address, &mut [Operation::Read(read)]).await
     }
 
+    /// Helper function. Mirror of [embedded_hal_async::i2c::I2c::write]
     pub async fn write(&mut self, address: u8, write: &[u8]) -> Result<(), Error> {
         self.transaction(address, &mut [Operation::Write(write)]).await
     }
 
+    /// Helper function. Mirror of [embedded_hal_async::i2c::I2c::write_read]
     pub async fn write_read(&mut self, address: u8, write: &[u8], read: &mut [u8]) -> Result<(), Error> {
         self.transaction(address, &mut [Operation::Write(write), Operation::Read(read)])
             .await
@@ -1119,13 +1142,13 @@ impl<'p> I2CController<'p> {
     }
 
     /// Listen for i2c interactions targeting the specified addresses. The handler will be called
-    /// to handle the various transactions. The listening can be stopped by setting the provided
-    /// watched value to true
-    pub async fn listen<const N: usize>(
+    /// to handle the various transactions. The listening can be stopped by calling the [CancellationToken::cancel] function
+    /// on the given token
+    pub async fn listen(
         &mut self,
         addresses: &[u8],
         mut handler: impl FnMut(u8, ListenCommand),
-        stop: &mut watch::Receiver<'_, impl RawMutex, bool, N>,
+        cancellation_token: &CancellationToken,
     ) -> Result<(), ListenError> {
         self.regs.smbn_ctl1().modify(|_, w| w.nminte().set_bit());
         if let Err(e) = self.configure_addresses(addresses) {
@@ -1142,7 +1165,7 @@ impl<'p> I2CController<'p> {
                         None
                     }
                 }),
-                stop.get_and(|v| *v),
+                cancellation_token.wait_for_cancel(),
             )
             .await
             {
@@ -1216,9 +1239,12 @@ mod sealed {
     }
 }
 
+/// A marker trait implemented for all valid configs
 pub trait ValidI2CConfig: sealed::SealedValidI2CConfig {}
 
+/// A marker trait implemented for all peripherals that can do I2C
 pub trait Instance: sealed::SealedInstance + embassy_hal_internal::Peripheral<P = Self> {
+    /// The interrupt use by this instance
     type Interrupt: crate::interrupt::typelevel::Interrupt;
 }
 

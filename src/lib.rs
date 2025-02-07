@@ -1,5 +1,8 @@
 #![no_std]
+#![doc = include_str!("../README.md")]
+#![warn(missing_docs)]
 
+pub mod cancellation;
 pub mod cdcg;
 pub mod gpio;
 pub mod gpio_miwu;
@@ -9,9 +12,11 @@ pub mod uart;
 
 pub use npcx490m_pac as pac;
 
+/// Configuration for the HAL
 #[non_exhaustive]
 #[derive(Debug, Clone, Default)]
 pub struct Config {
+    /// Clock configuration
     pub cdcg: cdcg::Config,
 }
 
@@ -44,6 +49,31 @@ embassy_hal_internal::peripherals!(
     SMB7, CR_UART1, CR_UART2, CR_UART3, CR_UART4,
 );
 
+/// Macro to bind interrupts to handlers.
+///
+/// This defines the right interrupt handlers, and creates a unit struct (like `struct Irqs;`)
+/// and implements the right [`Binding`]s for it. You can pass this struct to drivers to
+/// prove at compile-time that the right interrupts have been bound.
+///
+/// Example of how to bind one interrupt:
+///
+/// ```rust,ignore
+/// use embassy_npcx::{bind_interrupts, i2c, peripherals};
+///
+/// bind_interrupts!(pub struct Irqs {
+///     SMB5 => i2c::InterruptHandler<peripherals::SMB5>;
+/// });
+/// ```
+///
+/// Example of how to bind multiple interrupts, and multiple handlers to each interrupt, in a single macro invocation:
+///
+/// ```rust,ignore
+/// use embassy_npcx::{bind_interrupts, i2c, peripherals};
+///
+/// bind_interrupts!(struct Irqs {
+///     SMB5 => i2c::InterruptHandler<peripherals::SMB5>, i2c::InterruptHandler<peripherals::SMB5>;
+/// });
+/// ```
 #[macro_export]
 macro_rules! bind_interrupts {
     ($vis:vis struct $name:ident {
@@ -102,6 +132,8 @@ fn init(config: Config) -> Peripherals {
     Peripherals::take()
 }
 
+/// Inititalize the chip and HAL in `LPC` mode.
+/// After this the chip will need a full power-cycle to initialize into the `eSPI` mode.
 pub fn init_lpc(config: Config) -> (Peripherals, Lpc) {
     let per = init(config);
 
@@ -114,6 +146,8 @@ pub fn init_lpc(config: Config) -> (Peripherals, Lpc) {
     (per, Lpc {})
 }
 
+/// Inititalize the chip and HAL in `eSPI` mode.
+/// After this the chip will need a full power-cycle to initialize into the `LPC` mode.
 pub fn init_espi(config: Config) -> (Peripherals, ESpi) {
     let per = init(config);
 

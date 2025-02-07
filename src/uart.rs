@@ -16,19 +16,27 @@ use embassy_sync::waitqueue::AtomicWaker;
 
 use crate::interrupt::typelevel::Interrupt;
 
+/// Configuration for the number of stopbits
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum StopBits {
+    /// One stop bit
     STOP1,
+    /// Two stop bits
     STOP2,
 }
 
+/// Configuration for the parity used
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Parity {
+    /// Use odd parity
     ParityOdd = 0b00,
+    /// Use even parity
     ParityEven = 0b01,
+    /// Force parity bit to be 1
     ParityMark = 0b10,
+    /// Force parity bit to be 0
     ParitySpace = 0b11,
 }
 
@@ -39,10 +47,15 @@ pub enum Parity {
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[non_exhaustive]
 pub struct Config {
+    /// The target baudrate
     pub baudrate: u32,
+    /// The number of stop bits
     pub stop_bits: StopBits,
+    /// If None, no parity bit is added. If Some, a parity bit is added according to the value
     pub parity: Option<Parity>,
+    /// When true the input is inverted. High is seen as low and low is seen as high
     pub input_inverted: bool,
+    /// When true the output is inverted. High is seen as low and low is seen as high
     pub output_inverted: bool,
 }
 
@@ -63,17 +76,25 @@ impl Default for Config {
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[non_exhaustive]
 pub struct CommonModeConfig {
+    /// The base config just like for normal uart
     pub base: Config,
+    /// When true the pin is in push-pull mode. Otherwise it's open-drain
     pub push_pull: bool,
+    /// When true an 'echo' of all transmitted data is received by the receiver side
     pub feedback: bool,
 }
 
+/// The error type for the uart driver
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Error {
+    /// A line break was detected
     Break,
+    /// Data wasn't processed fast enough and an overrun happened
     DataOverrun,
+    /// Something went wrong with the framing of the incoming data
     Framing,
+    /// Invalid parity detected
     Parity,
 }
 
@@ -356,15 +377,19 @@ impl<'a, T: Instance + 'a> Uart<'a, T> {
         Self::instantiate_rx_tx(peri)
     }
 
+    /// Split the uart into a receiver and sender.
+    /// This can make doing rx and tx in different tasks much easier.
     pub fn split(self) -> (UartRx<'a>, UartTx<'a>) {
         (self.rx, self.tx)
     }
 }
 
+/// A receive-only uart
 pub struct UartRx<'a> {
     dev: PeripheralRef<'a, AnyUart>,
 }
 
+/// A send-only uart
 pub struct UartTx<'a> {
     dev: PeripheralRef<'a, AnyUart>,
 }
@@ -404,6 +429,7 @@ impl Drop for UartTx<'_> {
     }
 }
 
+/// The interrupt handler for the uart driver
 pub struct InterruptHandler<T> {
     _phantom: PhantomData<T>,
 }
@@ -616,18 +642,26 @@ mod sealed {
     }
 }
 
+/// A marker trait implemented by all uart peripherals
 pub trait Instance: sealed::SealedInstance + embassy_hal_internal::Peripheral<P = Self> {
+    /// The interrupt used by this instance
     type Interrupt: crate::interrupt::typelevel::Interrupt;
 }
 
+/// A marker trait implemented by all pins that can function as an input pin for the uart
 pub trait InputPin: sealed::SealedInputPin {
+    /// The uart this pin can be used for
     type Instance: Instance;
 }
+/// A marker trait implemented by all pins that can function as an output pin for the uart
 pub trait OutputPin: sealed::SealedOutputPin {
+    /// The uart this pin can be used for
     type Instance: Instance;
 }
 
+/// A marker trait implemented by all pins that can function as a common pin for the uart
 pub trait CommonPin: sealed::SealedCommonPin {
+    /// The uart this pin can be used for
     type Instance: Instance;
 }
 

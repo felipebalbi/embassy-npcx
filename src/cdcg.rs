@@ -24,6 +24,7 @@ pub(crate) unsafe fn get_clocks() -> &'static Clocks {
     (*&raw mut CLOCKS).assume_init_ref()
 }
 
+/// Clock config paramters
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -110,10 +111,10 @@ pub(crate) fn init_clocks(config: Config) {
     // TODO: When voscclock is not exactly one of these options, it will lead to increased error in serial port baud rate.
     // TODO: This should probably be checked in the serial port constructor.
     let sio_clk_sel = match voscclock {
-        ..93_000_000 => 0b11,            // 90 Mhz
-        93_000_000..98_000_000 => 0b00,  // 96 Mhz
-        98_000_000..110_000_000 => 0b01, // 100 Mhz
-        110_000_000.. => 0b10,           // 120 Mhz
+        ..93_000_000 => 0b11,            // 90 MHz
+        93_000_000..98_000_000 => 0b00,  // 96 MHz
+        98_000_000..110_000_000 => 0b01, // 100 MHz
+        110_000_000.. => 0b10,           // 120 MHz
     };
     unsafe { npcx490m_pac::Sysconfig::steal() }
         .dev_ctl3()
@@ -157,17 +158,17 @@ pub(crate) fn init_clocks(config: Config) {
     assert!(apb2_clk <= clk, "APB clock must not exceed the CLK");
     assert!(apb1_clk <= clk, "APB clock must not exceed the CLK");
 
-    assert!(clk <= 120_000_000, "Max CLK speed is 120 Mhz");
-    assert!(clk >= 4_000_000, "Min CLK speed is 4 Mhz");
+    assert!(clk <= 120_000_000, "Max CLK speed is 120 MHz");
+    assert!(clk >= 4_000_000, "Min CLK speed is 4 MHz");
 
     if clk > 60_000_000 {
         assert!(
             fiu0_clk.unwrap_or(0) <= clk / 2,
-            "FIUm_CLK frequency must be slower than half CLK if CLK is > 60 Mhz"
+            "FIUm_CLK frequency must be slower than half CLK if CLK is > 60 MHz"
         );
         assert!(
             fiu1_clk.unwrap_or(0) <= clk / 2,
-            "FIUm_CLK frequency must be slower than half CLK if CLK is > 60 Mhz"
+            "FIUm_CLK frequency must be slower than half CLK if CLK is > 60 MHz"
         );
     }
 
@@ -332,10 +333,20 @@ pub(crate) struct Clocks {
     pub(crate) mclkd: u32,
 }
 
+/// All possible ways the `VOSCCLK` is used for the dependend clocks
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VoscClockMode {
+    /// Allow a higher `MCLK` frequency:
+    /// - `FMCLK` = `VOSCCLK` / 2
+    /// - `MCLK` = `VOSCCLK`
     ExtendedFrequency,
+    /// The 'normal' mode:
+    /// - `FMCLK` = `VOSCCLK` / 2
+    /// - `MCLK` = `VOSCCLK` / 2
     Normal,
+    /// The mode to create 40 MHz with when `VOSCCLK` is at its max of 120 MHz:
+    /// - `FMCLK` = `VOSCCLK` / 3
+    /// - `MCLK` = `VOSCCLK` / 3
     Mhz40,
 }
 
@@ -358,18 +369,29 @@ impl From<LfClockSource> for XtOscSlEn {
     }
 }
 
+/// A divider value for the `MCLK` clock
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum MclkDivider {
+    /// No division
     Div1 = 0,
+    /// Output is `MCLK` / 2
     Div2 = 1,
+    /// Output is `MCLK` / 3
     Div3 = 2,
+    /// Output is `MCLK` / 4
     Div4 = 3,
+    /// Output is `MCLK` / 5
     Div5 = 4,
+    /// Output is `MCLK` / 6
     Div6 = 5,
+    /// Output is `MCLK` / 7
     Div7 = 6,
+    /// Output is `MCLK` / 8
     Div8 = 7,
+    /// Output is `MCLK` / 9
     Div9 = 8,
+    /// Output is `MCLK` / 10
     Div10 = 9,
 }
 
@@ -379,11 +401,15 @@ impl MclkDivider {
     }
 }
 
+/// A divider value for the `AHB` clock
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum AhbDivider {
+    /// No division
     Div1 = 0,
+    /// Output is `AHB` / 2
     Div2 = 1,
+    /// Output is `AHB` / 3
     Div3 = 2,
 }
 
@@ -393,11 +419,15 @@ impl AhbDivider {
     }
 }
 
+/// A divider value for the `MCLKD` clock
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum MclkdDivider {
+    /// No division
     Div1 = 0,
+    /// Output is `MCLKD` / 2
     Div2 = 1,
+    /// Output is `MCLKD` / 3
     Div3 = 2,
 }
 
