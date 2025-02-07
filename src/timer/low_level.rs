@@ -149,6 +149,9 @@ impl<'d, T: MultiFunctionInstance> MultiFunctionTimer<'d, T> {
         self.reset(Counter::Counter1);
         self.reset(Counter::Counter2);
 
+        // Configure comparison mode
+        r.tn_cpcfg().write(|w| w.eqaen().set_bit().eqben().set_bit());
+
         r.tn_prsc().write(|w| unsafe { w.bits(cfg.clk.clkps) });
 
         // Starts the clock.

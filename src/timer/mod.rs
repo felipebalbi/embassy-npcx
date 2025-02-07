@@ -39,4 +39,6 @@ macro_rules! impl_instance {
 
 impl_instance!(MFT16_1, Mft16_1);
 impl_instance!(MFT16_2, Mft16_2);
+
+#[cfg(not(feature = "time-driver-mft16-3"))]
 impl_instance!(MFT16_3, Mft16_3);
