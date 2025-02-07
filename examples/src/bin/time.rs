@@ -3,8 +3,7 @@
 
 use embassy_executor::Spawner;
 use embassy_npcx::gpio::{Level, Output, OutputOnly};
-use embassy_npcx::timer::low_level::{self, ClockSource, MultiFunctionTimer, WakeUpEvent};
-use embassy_npcx::{self as hal, bind_interrupts, Config};
+use embassy_npcx::Config;
 use embassy_time::Timer;
 use {defmt_rtt as _, panic_probe as _};
 

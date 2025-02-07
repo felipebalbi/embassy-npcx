@@ -11,24 +11,29 @@ use embassy_sync::blocking_mutex::{raw::CriticalSectionRawMutex, Mutex};
 use embassy_time_driver::{Driver, TICK_HZ};
 use embassy_time_queue_utils::Queue;
 
-#[cfg(feature = "time-driver-mft16-3")]
-const fn regs() -> &'static crate::pac::mft16_1::RegisterBlock {
-    unsafe { &*pac::Mft16_3::PTR }
+macro_rules! impl_instance {
+    ($instance:ident, $interrupt:ident) => {
+        const fn regs() -> &'static crate::pac::mft16_1::RegisterBlock {
+            unsafe { &*pac::$instance::PTR }
+        }
+
+        unsafe fn enable_interrupt() {
+            crate::interrupt::typelevel::$interrupt::enable();
+        }
+
+        #[pac::interrupt]
+        fn $interrupt() {
+            DRIVER.on_interrupt()
+        }
+    };
 }
 
-unsafe fn enable_interrupt() {
-    unsafe {
-        #[cfg(feature = "time-driver-mft16-3")]
-        crate::interrupt::typelevel::MFT16_3::enable();
-    }
-}
-
+#[cfg(feature = "time-driver-mft16-1")]
+impl_instance!(Mft16_1, MFT16_1);
+#[cfg(feature = "time-driver-mft16-2")]
+impl_instance!(Mft16_2, MFT16_2);
 #[cfg(feature = "time-driver-mft16-3")]
-#[cfg(feature = "rt")]
-#[pac::interrupt]
-fn MFT16_3() {
-    DRIVER.on_interrupt()
-}
+impl_instance!(Mft16_3, MFT16_3);
 
 // Clock timekeeping works with something we call "periods", which are time intervals
 // of 2^15 ticks. The Clock counter value is 16 bits, so one "overflow cycle" is 2 periods.
@@ -185,7 +190,7 @@ impl MultiFunctionTimerDriver {
             return false;
         }
 
-        // Write the CCR value regardless of whether we're going to enable it now or not.
+        // Write the alarm compare value regardless of whether we're going to enable it now or not.
         // This way, when we enable it later, the right value is already set.
         // Cast it to u16 grabbing the lsb's, and subtract because our counter counts down.
         let counter = 0xffff - (timestamp as u16);
