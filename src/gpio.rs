@@ -1,12 +1,17 @@
+//! Implementation for the GPIO peripheral
+
 use core::marker::PhantomData;
 
 use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
 use paste::paste;
 
+/// The level of a pin
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Level {
+    /// The pin is low
     Low,
+    /// The pin is high in push-pull and floating in open-drain
     High,
 }
 
@@ -96,20 +101,24 @@ impl Peripheral for AnyPin {
     }
 }
 
+/// This pin can only be an output
 pub struct OutputOnly {}
-
+/// This pin can be both input and output
 pub struct InputCapable {}
 
+/// This pin can do pull-down and pull-up
 pub struct CanPullUp {}
-
+/// This pin can only do pull-down
 pub struct PullDownOnly {}
 
+/// A pin configured in input mode
 pub struct Input<'d, T> {
     pin: PeripheralRef<'d, AnyPin>,
     _phantom: PhantomData<T>,
 }
 
 impl<'d> Input<'d, CanPullUp> {
+    /// Configure the pin in input mode
     pub fn new(pin: impl Peripheral<P = impl InputPin + 'd> + 'd) -> Self {
         into_ref!(pin);
 
@@ -130,6 +139,7 @@ impl<'d> Input<'d, CanPullUp> {
         }
     }
 
+    /// Enable the pullup on the pin
     pub fn enable_pullup(&mut self) {
         critical_section::with(|_| {
             let regs = self.pin.port();
@@ -139,6 +149,8 @@ impl<'d> Input<'d, CanPullUp> {
         });
     }
 
+    /// Degrade into a pin that can only do pulldown.
+    /// This doesn't change anything to the hardware, but can make it easier in the typesystem to deal with.
     #[must_use]
     pub fn degrade(self) -> Input<'d, PullDownOnly> {
         Input {
@@ -149,6 +161,7 @@ impl<'d> Input<'d, CanPullUp> {
 }
 
 impl<'d> Input<'d, PullDownOnly> {
+    /// Put a low voltage pin in input name
     pub fn new_lowvoltage(pin: impl Peripheral<P = impl LowVoltagePin + 'd> + 'd) -> Self {
         into_ref!(pin);
 
@@ -175,6 +188,7 @@ impl<'d> Input<'d, PullDownOnly> {
 }
 
 impl<T> Input<'_, T> {
+    /// Disable any pullup or pulldown on this pin
     pub fn disable_pull(&mut self) {
         critical_section::with(|_| {
             let regs = self.pin.port();
@@ -183,6 +197,7 @@ impl<T> Input<'_, T> {
         });
     }
 
+    /// Enable the pulldown
     pub fn enable_pulldown(&mut self) {
         critical_section::with(|_| {
             let regs = self.pin.port();
@@ -192,6 +207,7 @@ impl<T> Input<'_, T> {
         });
     }
 
+    /// Returns true if the pin is low
     #[must_use]
     pub fn is_low(&self) -> bool {
         let regs = self.pin.port();
@@ -199,20 +215,29 @@ impl<T> Input<'_, T> {
         regs.px_din().read().pin(self.pin.pin()).is_low()
     }
 
+    /// Returns true of the pin is high
     #[must_use]
     pub fn is_high(&self) -> bool {
         let regs = self.pin.port();
 
         regs.px_din().read().pin(self.pin.pin()).is_high()
     }
+
+    /// Returns the current level of the pin
+    #[must_use]
+    pub fn level(&self) -> Level {
+        self.is_high().into()
+    }
 }
 
+/// A pin that is configured as open-drain
 pub struct OutputOpenDrain<'d, T> {
     pin: PeripheralRef<'d, AnyPin>,
     _phantom: PhantomData<T>,
 }
 
 impl<'d> OutputOpenDrain<'d, OutputOnly> {
+    /// Configure a pin as open-drain
     pub fn new(pin: impl Peripheral<P = impl Pin + 'd> + 'd, level: Level) -> Self {
         into_ref!(pin);
 
@@ -238,6 +263,7 @@ impl<'d> OutputOpenDrain<'d, OutputOnly> {
 }
 
 impl<'d> OutputOpenDrain<'d, InputCapable> {
+    /// Configure a pin as open-drain
     pub fn new(pin: impl Peripheral<P = impl InputPin + 'd> + 'd, level: Level) -> Self {
         into_ref!(pin);
 
@@ -261,6 +287,8 @@ impl<'d> OutputOpenDrain<'d, InputCapable> {
         }
     }
 
+    /// Degrade the pin into an [OutputOnly] pin.
+    /// This doesn't change anything in the hardware, but can be nice for managing the typesystem.
     pub fn degrade(self) -> OutputOpenDrain<'d, OutputOnly> {
         OutputOpenDrain {
             pin: self.pin,
@@ -270,6 +298,7 @@ impl<'d> OutputOpenDrain<'d, InputCapable> {
 }
 
 impl<T> OutputOpenDrain<'_, T> {
+    /// Set the pin low
     pub fn set_low(&mut self) {
         critical_section::with(|_| {
             let regs = self.pin.port();
@@ -279,6 +308,7 @@ impl<T> OutputOpenDrain<'_, T> {
         });
     }
 
+    /// Set the pin high, which is floating in open-drain
     pub fn set_high(&mut self) {
         critical_section::with(|_| {
             let regs = self.pin.port();
@@ -288,6 +318,7 @@ impl<T> OutputOpenDrain<'_, T> {
         });
     }
 
+    /// Set the level of the pin
     pub fn set_value(&mut self, value: Level) {
         critical_section::with(|_| {
             let regs = self.pin.port();
@@ -297,6 +328,7 @@ impl<T> OutputOpenDrain<'_, T> {
         });
     }
 
+    /// Returns true if the pin is set low
     #[must_use]
     pub fn is_set_low(&mut self) -> bool {
         let regs = self.pin.port();
@@ -304,6 +336,7 @@ impl<T> OutputOpenDrain<'_, T> {
         regs.px_dout().read().pin(self.pin.pin()).is_low()
     }
 
+    /// Returns true if the pin is set high
     #[must_use]
     pub fn is_set_high(&mut self) -> bool {
         let regs = self.pin.port();
@@ -311,6 +344,7 @@ impl<T> OutputOpenDrain<'_, T> {
         regs.px_dout().read().pin(self.pin.pin()).is_high()
     }
 
+    /// Toggles the pin. If it was previously high, it will now be low and vice versa.
     pub fn toggle(&mut self) {
         critical_section::with(|_| {
             let regs = self.pin.port();
@@ -322,6 +356,7 @@ impl<T> OutputOpenDrain<'_, T> {
 }
 
 impl OutputOpenDrain<'_, InputCapable> {
+    /// Returns true if the pin senses a low level
     #[must_use]
     pub fn is_low(&self) -> bool {
         let regs = self.pin.port();
@@ -329,6 +364,7 @@ impl OutputOpenDrain<'_, InputCapable> {
         regs.px_din().read().pin(self.pin.pin()).is_low()
     }
 
+    /// Returns true if the pin senses a high level
     #[must_use]
     pub fn is_high(&self) -> bool {
         let regs = self.pin.port();
@@ -336,6 +372,8 @@ impl OutputOpenDrain<'_, InputCapable> {
         regs.px_din().read().pin(self.pin.pin()).is_high()
     }
 
+    /// Make the pin be driven always, even when the core is unpowered.
+    /// This is the default.
     pub fn drive_always(&self) {
         critical_section::with(|_| {
             let regs = self.pin.port();
@@ -343,6 +381,7 @@ impl OutputOpenDrain<'_, InputCapable> {
         })
     }
 
+    /// Make the pin not be driven when the core VDD is unpowered.
     pub fn drive_when_vdd_present(&self) {
         critical_section::with(|_| {
             let regs = self.pin.port();
@@ -351,12 +390,14 @@ impl OutputOpenDrain<'_, InputCapable> {
     }
 }
 
+/// A pin configured as output
 pub struct Output<'d, T> {
     pin: PeripheralRef<'d, AnyPin>,
     _phantom: PhantomData<T>,
 }
 
 impl<'d> Output<'d, OutputOnly> {
+    /// Configure a pin as output
     pub fn new(pin: impl Peripheral<P = impl Pin + 'd> + 'd, level: Level) -> Self {
         into_ref!(pin);
 
@@ -382,6 +423,7 @@ impl<'d> Output<'d, OutputOnly> {
 }
 
 impl<'d> Output<'d, InputCapable> {
+    /// Configure a pin as output
     pub fn new(pin: impl Peripheral<P = impl InputPin + 'd> + 'd, level: Level) -> Self {
         into_ref!(pin);
 
@@ -405,6 +447,7 @@ impl<'d> Output<'d, InputCapable> {
         }
     }
 
+    /// Configure a pin as output
     pub fn new_lowvoltage(pin: impl Peripheral<P = impl LowVoltagePin + 'd> + 'd, level: Level) -> Self {
         into_ref!(pin);
 
@@ -430,6 +473,8 @@ impl<'d> Output<'d, InputCapable> {
         }
     }
 
+    /// Degrade the pin into an [OutputOnly] pin.
+    /// This doesn't change anything in hardware, but can make the pin nicer to work with in the typesystem.
     #[must_use]
     pub fn degrade(self) -> Output<'d, OutputOnly> {
         Output {
@@ -440,6 +485,7 @@ impl<'d> Output<'d, InputCapable> {
 }
 
 impl<T> Output<'_, T> {
+    /// Set the pin low
     pub fn set_low(&mut self) {
         critical_section::with(|_| {
             let regs = self.pin.port();
@@ -449,6 +495,7 @@ impl<T> Output<'_, T> {
         });
     }
 
+    /// Set the pin high
     pub fn set_high(&mut self) {
         critical_section::with(|_| {
             let regs = self.pin.port();
@@ -458,6 +505,7 @@ impl<T> Output<'_, T> {
         });
     }
 
+    /// Set the level of the pin
     pub fn set_value(&mut self, value: Level) {
         critical_section::with(|_| {
             let regs = self.pin.port();
@@ -467,6 +515,7 @@ impl<T> Output<'_, T> {
         });
     }
 
+    /// Returns true if the pin is set to low
     #[must_use]
     pub fn is_set_low(&mut self) -> bool {
         let regs = self.pin.port();
@@ -474,6 +523,7 @@ impl<T> Output<'_, T> {
         regs.px_dout().read().pin(self.pin.pin()).is_low()
     }
 
+    /// Returns true if the pin is set to low
     #[must_use]
     pub fn is_set_high(&mut self) -> bool {
         let regs = self.pin.port();
@@ -481,6 +531,7 @@ impl<T> Output<'_, T> {
         regs.px_dout().read().pin(self.pin.pin()).is_high()
     }
 
+    /// Toggle the pin. If it was previously high, it will now be low and vice versa.
     pub fn toggle(&mut self) {
         critical_section::with(|_| {
             let regs = self.pin.port();
@@ -492,6 +543,8 @@ impl<T> Output<'_, T> {
 }
 
 impl Output<'_, InputCapable> {
+    /// Make the pin be driven always, even when the core is unpowered.
+    /// This is the default.
     pub fn drive_always(&self) {
         critical_section::with(|_| {
             let regs = self.pin.port();
@@ -499,6 +552,7 @@ impl Output<'_, InputCapable> {
         })
     }
 
+    /// Make the pin not be driven when the core VDD is unpowered.
     pub fn drive_when_vdd_present(&self) {
         critical_section::with(|_| {
             let regs = self.pin.port();
@@ -593,10 +647,13 @@ impl embedded_hal::digital::InputPin for OutputOpenDrain<'_, InputCapable> {
     }
 }
 
+/// A marker trait implemented for all pins that can function as an input but only support low voltage
 pub trait LowVoltagePin: InputPin + sealed::SealedLowVoltagePin {}
 
+/// A marker trait implemented for all pins that can function as an input
 pub trait InputPin: Pin + sealed::SealedInputPin {}
 
+/// A marker trait implemented for all pins
 pub trait Pin: sealed::SealedPin {}
 
 macro_rules! impl_pin {

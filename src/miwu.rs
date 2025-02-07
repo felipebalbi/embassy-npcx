@@ -17,20 +17,27 @@ use paste::paste;
 
 /// Signal level used as signalling condition.
 pub enum Level {
+    /// A low signal
     Low,
+    /// A high signal
     High,
 }
 
 /// Signal edge used as signalling condition.
 pub enum Edge {
+    /// Both falling and rising edges
     Any,
+    /// The transition from low to high
     Falling,
+    /// The transition from high to low
     Rising,
 }
 
 /// Signalling condition on which the [WakeUp] input is triggered.
 pub enum Mode {
+    /// Trigger when the signal is at this level
     Level(Level),
+    /// Trigger when the signal changes
     Edge(Edge),
 }
 
@@ -61,6 +68,7 @@ mod sealed {
 /// WakeUpInput (WUI) trait.
 #[allow(private_bounds)]
 pub trait WakeUpInput: sealed::SealedWakeUpInput {
+    /// The interrupt used by this instance
     type Interrupt: crate::interrupt::typelevel::Interrupt;
 }
 
@@ -144,6 +152,7 @@ impl<'d> WakeUp<'d> {
         });
     }
 
+    /// Make the signal no longer pending due to a previous trigger
     pub fn clear_pending(&mut self) {
         let wui = self.wui.reborrow();
         // Note(no-cs): atomic write to clear a single bit, safe.
@@ -286,6 +295,7 @@ impl Future for WakeUpInputFuture<'_, '_> {
     }
 }
 
+/// Interrupt handler for the [WakeUp] driver
 pub struct InterruptHandler<T> {
     _phantom: PhantomData<T>,
 }
