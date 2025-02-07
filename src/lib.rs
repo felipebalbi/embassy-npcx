@@ -229,3 +229,83 @@ embassy_hal_internal::interrupt_mod!(
     ITIM64,
     WKINTH_2,
 );
+
+#[cfg(feature = "rt")]
+mod rt {
+    use core::ptr::addr_of;
+
+    #[repr(u32)]
+    enum BootloaderAnchor {
+        Magic = 0x2A3B4D5E,
+    }
+
+    #[repr(u16)]
+    #[allow(unused)]
+    enum BootloaderHeaderCrc {
+        Enable = 0xAB1E,
+        Disable = 0x54E1,
+    }
+
+    #[repr(C, packed(1))]
+    struct BootloaderHeader {
+        anchor: BootloaderAnchor,
+        header_crc: BootloaderHeaderCrc,
+        spi_max_clock: u8,
+        spi_read_mode: u8,
+        firmware_error_detection: u8,
+        firmware_load_start_address: *const u8,
+        firmware_entry_point: *const u8,
+        firmware_error_detect_start: u32,
+        firmware_error_detect_end: u32,
+        firmware_length: *const u8,
+        flash_size: u8,
+        otp_write_protect: u8,
+        key_valid: u8,
+        firmware_valid: u8,
+        ram_fault_config: u8,
+        reserved: [u8; 6],
+        ram_code_only_start: u32,
+        ram_code_only_size: u32,
+        ram_data_only_start: u32,
+        ram_data_only_size: u32,
+        firmware_header_crc: u32,
+        firmware_image_crc: u32,
+    }
+
+    unsafe impl Sync for BootloaderHeader {}
+
+    unsafe extern "C" {
+        unsafe static __load_addr: u8;
+        unsafe static _entry: u8;
+        unsafe static __firmware_length: u8;
+    }
+
+    #[doc(hidden)]
+    #[link_section = ".bootloader_header"]
+    #[no_mangle]
+    #[allow(private_interfaces)]
+    pub static __HEADER: BootloaderHeader = BootloaderHeader {
+        anchor: BootloaderAnchor::Magic,
+        header_crc: BootloaderHeaderCrc::Disable,
+        spi_max_clock: 0,
+        spi_read_mode: 0,
+        firmware_error_detection: 0,
+        firmware_load_start_address: addr_of!(__load_addr),
+        firmware_entry_point: addr_of!(_entry),
+        firmware_error_detect_start: 0,
+        firmware_error_detect_end: 0,
+        firmware_length: addr_of!(__firmware_length),
+        flash_size: 0,
+        otp_write_protect: 0,
+        key_valid: 0,
+        firmware_valid: 0,
+        ram_fault_config: 0,
+        reserved: [0; 6],
+        ram_code_only_start: 0,
+        ram_code_only_size: 0,
+        ram_data_only_start: 0,
+        ram_data_only_size: 0,
+        firmware_header_crc: 0,
+        firmware_image_crc: 0,
+    };
+}

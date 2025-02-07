@@ -5,14 +5,16 @@
 //! Implements the full-duplex receiver transmitter integration with 16-byte FIFO buffers for receive and transmit.
 //! Does not (yet) support DMA transactions.
 
-use crate::interrupt::typelevel::Interrupt;
 use core::convert::Infallible;
 use core::future::poll_fn;
 use core::marker::PhantomData;
 use core::sync::atomic::{AtomicU8, Ordering};
 use core::task::Poll;
+
 use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
 use embassy_sync::waitqueue::AtomicWaker;
+
+use crate::interrupt::typelevel::Interrupt;
 
 /// Configuration for the number of stopbits
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
