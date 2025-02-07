@@ -11,6 +11,8 @@ focused on supporting the NPCX490 family first using the 980521543-011 board wit
 NPCX498F (Ramon EVB w/ 200-pin MECC) as the development platform. The plan is to 
 eventually upstream this to Embassy official repository.
 
+When using this HAL, to run code from the flash you need to use the `link_flash.x` linker script, instead of the usual cortex-m-rt `link.x` linker script. To do this, add `-C link-arg=-Tlink_flash.x` to your rust flags.
+
 ## Peripherals HALs
 
 * Timer

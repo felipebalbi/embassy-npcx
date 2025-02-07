@@ -4,7 +4,7 @@ runner = 'probe-rs run --chip-description-path ./npcx490m-chip.yaml --chip NPCX4
 
 rustflags = [
   "-C", "linker=flip-link",
-  "-C", "link-arg=-Tlink.x",
+  "-C", "link-arg=-Tlink_flash.x",
   "-C", "link-arg=-Tdefmt.x",
   # This is needed if your flash or ram addresses are not aligned to 0x10000 in memory.x
   # See https://github.com/rust-embedded/cortex-m-quickstart/pull/95

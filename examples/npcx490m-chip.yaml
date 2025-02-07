@@ -26,17 +26,17 @@ variants:
         cores:
           - core1
       - !Ram
-        name: CODE_RAM_alias
+        name: CODE_RAM
         range:
           # The start address of the memory (inclusive).
-          start: 0x20060000
+          start: 0x10060000
           # The end address of the memory (inclusive).
-          end: 0x200BFFFF
+          end: 0x100BFFFF
         # List of cores that can access this region
         cores:
           - core1
       - !Ram
-        name: DATA_RAM_alias
+        name: DATA_RAM
         range:
           start: 0x200C0000
           end: 0x200DC7FF
