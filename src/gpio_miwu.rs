@@ -25,6 +25,7 @@ pub struct AwaitableInput<'d, T> {
 }
 
 impl<'d> AwaitableInput<'d, CanPullUp> {
+    /// Create a new input that can be awaited
     pub fn new<PIN, WUI>(
         pin: impl Peripheral<P = PIN> + 'd,
         wui: impl Peripheral<P = WUI> + 'd,
@@ -43,6 +44,7 @@ impl<'d> AwaitableInput<'d, CanPullUp> {
 }
 
 impl<'d> AwaitableInput<'d, PullDownOnly> {
+    /// Create a new input that can be awaited
     pub fn new_lowvoltage<PIN, WUI>(
         pin: impl Peripheral<P = PIN> + 'd,
         wui: impl Peripheral<P = WUI> + 'd,
