@@ -1,3 +1,5 @@
+//! Drivers for the timers in this device.
+
 pub mod low_level;
 
 use embassy_sync::waitqueue::AtomicWaker;
@@ -11,7 +13,7 @@ mod sealed {
     }
 }
 
-trait MultiFunctionInstance: sealed::SealedMultiFunctionInstance {
+pub trait MultiFunctionInstance: sealed::SealedMultiFunctionInstance {
     type Interrupt: crate::interrupt::typelevel::Interrupt;
 }
 
