@@ -1,4 +1,4 @@
-/* Based on cortex-m-rt link.x.in, originally licensed under MIT */
+/* Based on cortex-m-rt link.x.in (de611827066c6f203af3078f8256b5f7ef775c8e), originally licensed under MIT */
 
 /* # Developer notes
 
