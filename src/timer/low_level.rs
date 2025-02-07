@@ -32,13 +32,13 @@ pub enum PulseAccumulateClockSelect {
 
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct ClockConfiguration {
-    counter1_src: ClockSource,
-    counter2_src: ClockSource,
-    clkps: u8,
-    pls_acc_clk: PulseAccumulateClockSelect,
+pub struct ClockConfig {
+    pub counter1_src: ClockSource,
+    pub counter2_src: ClockSource,
+    pub clkps: u8,
+    pub pls_acc_clk: PulseAccumulateClockSelect,
     /// Enable timers in low power mode.
-    low_pwr: bool,
+    pub low_pwr: bool,
 }
 
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -61,9 +61,9 @@ pub enum Mode {
 
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct Configuration {
-    clk: ClockConfiguration,
-    mode: Mode,
+pub struct Config {
+    pub clk: ClockConfig,
+    pub mode: Mode,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -108,6 +108,14 @@ impl WakeUpEvents {
     }
 }
 
+impl From<WakeUpEvent> for WakeUpEvents {
+    fn from(value: WakeUpEvent) -> Self {
+        let mut res = WakeUpEvents::default();
+        res.set(value, true);
+        res
+    }
+}
+
 /// Partial timer driver for one of three 16-bit MultiFunctionTimer(MFT16).
 ///
 /// In practice this driver is mainly usable in Dual-Independent Timer mode.
@@ -130,7 +138,7 @@ impl<'d, T: MultiFunctionInstance> MultiFunctionTimer<'d, T> {
         Self { _instance: instance }
     }
 
-    pub fn enable(&mut self, cfg: Configuration) {
+    pub fn enable(&mut self, cfg: Config) {
         let r = T::regs();
 
         // Disable the clocksources before configuring.
@@ -197,7 +205,9 @@ impl<'d, T: MultiFunctionInstance> MultiFunctionTimer<'d, T> {
     /// Await for at least a single wake up event to be pending.
     ///
     /// Will reset the pending event, deconfigure the interrupt, and will return all events that ended up triggering.
-    pub async fn wait_for_single(&mut self, events: WakeUpEvents) -> WakeUpEvents {
+    pub async fn wait_for_single(&mut self, events: impl Into<WakeUpEvents>) -> WakeUpEvents {
+        let events = events.into();
+
         if events == WakeUpEvents::default() {
             return events; // Do not need to wait for any event.
         }
@@ -206,7 +216,7 @@ impl<'d, T: MultiFunctionInstance> MultiFunctionTimer<'d, T> {
         // Note(cs): interrupt handler changes this register as well.
         critical_section::with(|_| {
             T::regs()
-                .tn_wuen()
+                .tn_ien()
                 .modify(|r, w| unsafe { w.bits((r.bits() & 0b1100_0000) | events.0) });
         });
 
@@ -246,7 +256,7 @@ impl<T: MultiFunctionInstance> crate::interrupt::typelevel::Handler<T::Interrupt
         T::waker().wake();
         // Deconfigure all wake-up events, but do not clear them.
         T::regs()
-            .tn_wuen()
+            .tn_ien()
             .modify(|r, w| unsafe { w.bits(r.bits() & 0b1100_0000) });
     }
 }
