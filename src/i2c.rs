@@ -3,11 +3,10 @@ use core::marker::PhantomData;
 
 use embassy_futures::select::select;
 use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
-use embassy_sync::blocking_mutex::raw::RawMutex;
 use embassy_sync::waitqueue::AtomicWaker;
-use embassy_sync::watch;
 pub use embedded_hal_async::i2c::{I2c, Operation};
 
+use crate::cancellation::CancellationToken;
 use crate::cdcg::get_clocks;
 use crate::gpio::Pin;
 use crate::interrupt::typelevel::Interrupt;
@@ -1119,13 +1118,13 @@ impl<'p> I2CController<'p> {
     }
 
     /// Listen for i2c interactions targeting the specified addresses. The handler will be called
-    /// to handle the various transactions. The listening can be stopped by setting the provided
-    /// watched value to true
-    pub async fn listen<const N: usize>(
+    /// to handle the various transactions. The listening can be stopped by calling the [CancellationToken::cancel] function
+    /// on the given token
+    pub async fn listen(
         &mut self,
         addresses: &[u8],
         mut handler: impl FnMut(u8, ListenCommand),
-        stop: &mut watch::Receiver<'_, impl RawMutex, bool, N>,
+        cancellation_token: &CancellationToken,
     ) -> Result<(), ListenError> {
         self.regs.smbn_ctl1().modify(|_, w| w.nminte().set_bit());
         if let Err(e) = self.configure_addresses(addresses) {
@@ -1142,7 +1141,7 @@ impl<'p> I2CController<'p> {
                         None
                     }
                 }),
-                stop.get_and(|v| *v),
+                cancellation_token.wait_for_cancel(),
             )
             .await
             {
