@@ -1,3 +1,5 @@
+//! Implementation of the [CancellationToken]
+
 use core::sync::atomic::AtomicBool;
 
 use maitake_sync::WaitQueue;
