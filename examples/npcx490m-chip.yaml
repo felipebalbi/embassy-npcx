@@ -13,7 +13,7 @@ variants:
         type: armv7em
         # Core-specific options. Can be one of: `!Arm {}`, `!Riscv {}`, `!Xtensa {}`
         core_access_options: !Arm
-          ap: 0
+          ap: !v1 0
     # A list of all the available memories and their properties.
     memory_map:
       # The type of the memory. Possible are [!Ram, !Nvm, !Generic].
