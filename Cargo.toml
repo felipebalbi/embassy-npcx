@@ -14,7 +14,7 @@ rust-version = "1.84.0"
 [features]
 default = ["rt"]
 defmt = ["dep:defmt"]
-rt = ["npcx490m-pac/rt", "dep:cortex-m-rt"]
+rt = ["npcx490m-pac/rt", "dep:cortex-m-rt", "cortex-m-rt/set-vtor", "cortex-m-rt/set-sp"]
 
 [dependencies]
 npcx490m-pac = { git = "https://github.com/OpenDevicePartnership/npcx490m-pac", rev = "b7d1756a07d682a0f15e462710cc59b170effa3c", features = ["critical-section"] }
