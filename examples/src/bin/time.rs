@@ -1,3 +1,5 @@
+//! Run with feature `time_lfclk` or `time_apb1`.
+
 #![no_main]
 #![no_std]
 
