@@ -6,6 +6,7 @@ use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
 
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+/// Clock source for MFT16 timers.
 pub enum ClockSource {
     /// Do not run this counter.
     #[default]
@@ -22,6 +23,7 @@ pub enum ClockSource {
 
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+/// Clock source when using Pulse Accumulate mode for MFT16 timers.
 pub enum PulseAccumulateClockSelect {
     /// Prescaled APB1 clock. (The counter is frozen in sleep mode)
     #[default]
@@ -32,10 +34,15 @@ pub enum PulseAccumulateClockSelect {
 
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+/// Configuration for a MFT16 clock.
 pub struct ClockConfig {
+    /// Clock source for counter 1.
     pub counter1_src: ClockSource,
+    /// Clock source for counter 2.
     pub counter2_src: ClockSource,
+    /// Prescaler when using PrescaledAPB1Clock.
     pub clkps: u8,
+    /// Clock source when using PulseAccumulate.
     pub pls_acc_clk: PulseAccumulateClockSelect,
     /// Enable timers in low power mode.
     pub low_pwr: bool,
@@ -43,6 +50,7 @@ pub struct ClockConfig {
 
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+/// Mode for a MFT16 peripheral.
 pub enum Mode {
     /// PWM and Counter mode.
     Mode1 = 0b000,
@@ -61,20 +69,27 @@ pub enum Mode {
 
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+/// Config for a MFT16 peripheral.
 pub struct Config {
+    /// Clock configuration.
     pub clk: ClockConfig,
+    /// Mode that determines the way the two counters are used and which events are generated.
     pub mode: Mode,
 }
 
+#[allow(missing_docs)]
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+/// One of two counters contained in the MFT16 peripheral.
 pub enum Counter {
     Counter1,
     Counter2,
 }
 
+#[allow(missing_docs)]
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+/// One of the various WakeUpEvents, for which the semantics depend on the selected Mode.
 pub enum WakeUpEvent {
     A = 0,
     B,
@@ -92,13 +107,16 @@ impl WakeUpEvent {
 
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+/// Struct to encapsulate a selection of the various WakeUpEvents.
 pub struct WakeUpEvents(u8);
 
 impl WakeUpEvents {
+    /// Get whether `event` is set in the current selection.
     pub fn get(&self, event: WakeUpEvent) -> bool {
         self.0 & event.mask() != 0x0
     }
 
+    /// Set whether `event` is set in the current selection, depending on the `value`.
     pub fn set(&mut self, event: WakeUpEvent, value: bool) {
         if value {
             self.0 |= event.mask();
@@ -125,6 +143,7 @@ pub struct MultiFunctionTimer<'d, T: MultiFunctionInstance> {
 }
 
 impl<'d, T: MultiFunctionInstance> MultiFunctionTimer<'d, T> {
+    /// Instantiate the MFT16 driver for this peripheral.
     pub fn new(
         instance: impl Peripheral<P = T> + 'd,
         _irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>,
@@ -138,6 +157,7 @@ impl<'d, T: MultiFunctionInstance> MultiFunctionTimer<'d, T> {
         Self { _instance: instance }
     }
 
+    /// Enable the MFT16 driver for this peripheral with a specific configuration, and starts running the timer.
     pub fn enable(&mut self, cfg: Config) {
         let r = T::regs();
 
@@ -167,16 +187,19 @@ impl<'d, T: MultiFunctionInstance> MultiFunctionTimer<'d, T> {
         });
     }
 
+    /// Disable running the timer.
     pub fn disable(&mut self) {
         T::regs()
             .tn_ckc()
             .write(|w| unsafe { w.c1csel().bits(0b000).c2csel().bits(0b000) });
     }
 
+    /// Reset the selected counter for this timer.
     pub fn reset(&mut self, counter: Counter) {
         self.set_counter(counter, 0x0000);
     }
 
+    /// Get the value for the selected counter.
     pub fn counter(&self, counter: Counter) -> u16 {
         match counter {
             Counter::Counter1 => T::regs().tn_cnt1().read().bits(),
@@ -184,6 +207,7 @@ impl<'d, T: MultiFunctionInstance> MultiFunctionTimer<'d, T> {
         }
     }
 
+    /// Set the value for the selected counter.
     pub fn set_counter(&mut self, counter: Counter, value: u16) {
         match counter {
             Counter::Counter1 => T::regs().tn_cnt1().write(|w| unsafe { w.bits(value) }),
@@ -191,6 +215,7 @@ impl<'d, T: MultiFunctionInstance> MultiFunctionTimer<'d, T> {
         };
     }
 
+    /// Set the comparator value for the selected counter.
     pub fn set_compare(&mut self, counter: Counter, value: u16) {
         match counter {
             Counter::Counter1 => T::regs().tn_cpa().write(|w| unsafe { w.bits(value) }),
@@ -198,6 +223,7 @@ impl<'d, T: MultiFunctionInstance> MultiFunctionTimer<'d, T> {
         };
     }
 
+    /// Set the value to which the value will be reloaded when underflowing for the selected counter.
     pub fn set_reload_capture(&mut self, counter: Counter, value: u16) {
         match counter {
             Counter::Counter1 => T::regs().tn_cra().write(|w| unsafe { w.bits(value) }),
@@ -250,6 +276,7 @@ impl<T: MultiFunctionInstance> Drop for MultiFunctionTimer<'_, T> {
     }
 }
 
+/// The interrupt handler for the MFT16 driver.
 pub struct InterruptHandler<T> {
     _phantom: PhantomData<T>,
 }

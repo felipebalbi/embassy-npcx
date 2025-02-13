@@ -13,7 +13,9 @@ mod sealed {
     }
 }
 
+/// An instance of the MFT16 peripheral.
 pub trait MultiFunctionInstance: sealed::SealedMultiFunctionInstance {
+    /// The interrupt used by this instance.
     type Interrupt: crate::interrupt::typelevel::Interrupt;
 }
 
