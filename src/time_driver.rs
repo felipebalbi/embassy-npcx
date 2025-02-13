@@ -1,7 +1,4 @@
-use crate::{
-    interrupt::{self, typelevel::Interrupt},
-    pac,
-};
+use crate::{interrupt::typelevel::Interrupt, pac};
 use core::{
     cell::{Cell, RefCell},
     sync::atomic::{compiler_fence, AtomicU32, Ordering},
@@ -21,6 +18,10 @@ macro_rules! impl_instance {
             crate::interrupt::typelevel::$interrupt::enable();
         }
 
+        #[allow(unused)]
+        use crate::interrupt;
+
+        #[cfg(feature = "rt")]
         #[pac::interrupt]
         fn $interrupt() {
             DRIVER.on_interrupt()
@@ -28,12 +29,15 @@ macro_rules! impl_instance {
     };
 }
 
-#[cfg(feature = "time-driver-mft16-1")]
-impl_instance!(Mft16_1, MFT16_1);
-#[cfg(feature = "time-driver-mft16-2")]
-impl_instance!(Mft16_2, MFT16_2);
-#[cfg(feature = "time-driver-mft16-3")]
-impl_instance!(Mft16_3, MFT16_3);
+cfg_if::cfg_if! {
+    if #[cfg(feature = "time-driver-mft16-1")] {
+        impl_instance!(Mft16_1, MFT16_1);
+    } else if #[cfg(feature = "time-driver-mft16-2")] {
+        impl_instance!(Mft16_2, MFT16_2);
+    } else if #[cfg(feature = "time-driver-mft16-3")] {
+        impl_instance!(Mft16_3, MFT16_3);
+    }
+}
 
 // Clock timekeeping works with something we call "periods", which are time intervals
 // of 2^15 ticks. The Clock counter value is 16 bits, so one "overflow cycle" is 2 periods.
@@ -152,6 +156,7 @@ impl MultiFunctionTimerDriver {
         }
     }
 
+    #[allow(unused)]
     fn on_interrupt(&self) {
         let r = regs();
         let pending = r.tn_ectrl().read();

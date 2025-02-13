@@ -11,7 +11,11 @@ pub mod miwu;
 pub mod timer;
 pub mod uart;
 
-#[cfg(feature = "_time-driver")]
+#[cfg(any(
+    feature = "time-driver-mft16-1",
+    feature = "time-driver-mft16-2",
+    feature = "time-driver-mft16-3"
+))]
 mod time_driver;
 
 pub use npcx490m_pac as pac;
@@ -454,7 +458,11 @@ pub struct ESpi {}
 fn init(config: Config) -> Peripherals {
     cdcg::init_clocks(config.cdcg);
 
-    #[cfg(feature = "_time-driver")]
+    #[cfg(any(
+        feature = "time-driver-mft16-1",
+        feature = "time-driver-mft16-2",
+        feature = "time-driver-mft16-3"
+    ))]
     critical_section::with(|cs| {
         time_driver::init(cs);
     });

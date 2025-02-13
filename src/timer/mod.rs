@@ -2,6 +2,7 @@
 
 pub mod low_level;
 
+#[allow(unused)]
 use embassy_sync::waitqueue::AtomicWaker;
 
 mod sealed {
@@ -13,12 +14,14 @@ mod sealed {
     }
 }
 
+#[allow(unused)]
 /// An instance of the MFT16 peripheral.
 pub trait MultiFunctionInstance: sealed::SealedMultiFunctionInstance {
     /// The interrupt used by this instance.
     type Interrupt: crate::interrupt::typelevel::Interrupt;
 }
 
+#[allow(unused)]
 macro_rules! impl_instance {
     ($instance:ident, $pac:ident) => {
         impl sealed::SealedMultiFunctionInstance for crate::peripherals::$instance {
