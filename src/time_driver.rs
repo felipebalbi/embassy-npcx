@@ -155,8 +155,7 @@ impl MultiFunctionTimerDriver {
 
     fn next_period(&self, cs: CriticalSection) {
         // We only modify the period from the timer interrupt, so we know this can't race.
-        let period = self.period.load(Ordering::Relaxed) + 1;
-        self.period.store(period, Ordering::Relaxed);
+        let period = self.period.fetch_add(1, Ordering::Relaxed) + 1;
         let t = (period as u64) << 15;
 
         let alarm = self.alarm.borrow(cs);
@@ -222,7 +221,7 @@ impl MultiFunctionTimerDriver {
 impl Driver for MultiFunctionTimerDriver {
     fn now(&self) -> u64 {
         let period = self.period.load(Ordering::Relaxed);
-        compiler_fence(Ordering::Acquire);
+        compiler_fence(Ordering::Acquire); // Ensure that period is loaded before counter.
         let counter = regs().tn_cnt1().read().bits();
         calc_now(period, counter)
     }
