@@ -21,6 +21,7 @@ unsafe fn set_clocks(clocks: Clocks) {
 
 /// Safety: May only be used after the [init_clocks] function.
 pub(crate) unsafe fn get_clocks() -> &'static Clocks {
+    #[allow(clippy::deref_addrof)]
     (*&raw mut CLOCKS).assume_init_ref()
 }
 
