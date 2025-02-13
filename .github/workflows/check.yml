@@ -98,7 +98,7 @@ jobs:
         uses: giraffate/clippy-action@v1
         with:
           reporter: 'github-pr-check'
-          clippy_flags: -- -F clippy::suspicious -F clippy::correctness -F clippy::perf -F clippy::style
+          clippy_flags: -- -F clippy::suspicious -F clippy::correctness -F clippy::perf -D clippy::style
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
   examples:
