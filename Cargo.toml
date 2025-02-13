@@ -12,7 +12,7 @@ repository = "https://github.com/OpenDevicePartnership/embassy-npcx"
 rust-version = "1.84.0"
 
 [features]
-default = ["rt", "time-driver-mft16-3"]
+default = ["rt"]
 defmt = ["dep:defmt"]
 rt = ["npcx490m-pac/rt", "dep:cortex-m-rt", "cortex-m-rt/set-vtor", "cortex-m-rt/set-sp"]
 
@@ -21,7 +21,7 @@ time = ["dep:embassy-time"]
 
 # Features starting with `_` are for internal use only. They're not intended
 # to be enabled by other crates, and are not covered by semver guarantees.
-_time-driver = ["dep:embassy-time-driver", "embassy-time-driver?/tick-hz-32_768", "time", "dep:embassy-time-queue-utils"]
+_time-driver = ["dep:embassy-time-driver", "time", "dep:embassy-time-queue-utils"]
 
 time-driver-mft16-1 = ["_time-driver"]
 time-driver-mft16-2 = ["_time-driver"]

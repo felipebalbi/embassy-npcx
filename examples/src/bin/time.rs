@@ -9,7 +9,9 @@ use {defmt_rtt as _, panic_probe as _};
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
-    let (p, _) = embassy_npcx::init_espi(Config::default());
+    let mut config = Config::default();
+    config.cdcg.mult_m = 0xc00; // MCLK = 48KibiHz, such that APB1clk is 6MibiHz.
+    let (p, _) = embassy_npcx::init_espi(config);
 
     let mut led = Output::<'_, OutputOnly>::new(p.PJ07, Level::High);
     loop {

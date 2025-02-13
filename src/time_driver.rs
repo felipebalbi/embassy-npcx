@@ -89,10 +89,6 @@ impl MultiFunctionTimerDriver {
     fn init(&'static self, _cs: critical_section::CriticalSection) {
         let r = regs();
 
-        if TICK_HZ != 32768 {
-            panic!("Only a tickrate of 32KHz is supported");
-        }
-
         unsafe { enable_interrupt() };
 
         // Disable the clocks.
@@ -123,9 +119,37 @@ impl MultiFunctionTimerDriver {
         // Set low power clock mode before starting the clocks.
         r.tn_ckc().write(|w| w.low_pwr().bit(true));
 
-        // Starts the clocks sources from LFCLK.
-        r.tn_ckc()
-            .modify(|_, w| unsafe { w.c1csel().bits(0b100).c2csel().bits(0b100) });
+        if TICK_HZ == 32768 {
+            // Starts the clocks sources from LFCLK.
+            r.tn_ckc()
+                .modify(|_, w| unsafe { w.c1csel().bits(0b100).c2csel().bits(0b100) });
+        } else {
+            // Use prescaled APB1 clock to drive counters.
+
+            // Note(unsafe): time driver is initialized after the clocks have been initialized.
+            let clocks = unsafe { crate::cdcg::get_clocks() };
+
+            if clocks.apb1_clk % TICK_HZ as u32 != 0 {
+                panic!(
+                    "APB1CLK ({}) is not a multiple of desired time_driver tickrate ({})",
+                    clocks.apb1_clk, TICK_HZ
+                );
+            }
+
+            let prescaler = clocks.apb1_clk / TICK_HZ as u32;
+            if prescaler > 256 {
+                panic!(
+                    "Cannot derive a prescaling for APB1CLK ({}) and desired time_driver tickrate ({})",
+                    clocks.apb1_clk, TICK_HZ
+                );
+            }
+            let clkps = (prescaler - 1) as u8;
+            r.tn_prsc().write(|w| unsafe { w.bits(clkps) });
+
+            // Starts the clocks sources from prescaled APB1.
+            r.tn_ckc()
+                .modify(|_, w| unsafe { w.c1csel().bits(0b001).c2csel().bits(0b001) });
+        }
     }
 
     fn on_interrupt(&self) {
