@@ -670,7 +670,7 @@ impl<'p> I2CController<'p> {
                 *b = self.regs.smbn_sda().read().bits();
             }
 
-            if data.len() == 0 {
+            if data.is_empty() {
                 // setup the actual last group
                 self.regs.smbn_rxf_ctl().write(|w| unsafe {
                     w.last_pec()
@@ -991,7 +991,7 @@ impl<'p> I2CController<'p> {
                 Some(a.addr().bits())
             } else if self.regs.smbn_cst3().read().matcha8f().bit_is_set() {
                 self.bank_sel(false);
-                let a = self.regs.smbn_addr7().read();
+                let a = self.regs.smbn_addr8().read();
                 self.bank_sel(true);
                 Some(a.addr().bits())
             } else {
