@@ -1,11 +1,10 @@
 #![no_main]
 #![no_std]
 
-use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_npcx::{bind_interrupts, peripherals, uart, Config};
 use embedded_io_async::{Read, Write};
-use panic_probe as _;
+use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(pub struct Irqs {
     CR_UART1_MDMA1 => embassy_npcx::uart::InterruptHandler<peripherals::CR_UART1>;

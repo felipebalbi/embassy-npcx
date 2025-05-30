@@ -2,13 +2,15 @@
 
 use core::future::Future;
 use core::marker::PhantomData;
+use core::sync::atomic::{AtomicU32, Ordering};
 
-use embassy_futures::select::select;
 use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
 use embassy_sync::waitqueue::AtomicWaker;
 pub use embedded_hal_async::i2c::{I2c, Operation};
+use embedded_hal_i2c::{
+    AnyAddress, AsyncI2cTarget, AsyncReadTransaction, AsyncWriteTransaction, ReadResult, Transaction, WriteResult,
+};
 
-use crate::cancellation::CancellationToken;
 use crate::cdcg::get_clocks;
 use crate::gpio::Pin;
 use crate::interrupt::typelevel::Interrupt;
@@ -23,6 +25,11 @@ pub const GENERALCALL_ADDRESS: u8 = 0;
 /// SMBUS ARP address
 pub const ARP_ADDRESS: u8 = 0b1100001;
 
+// Interrupt remediations
+const REMEDIATION_NONE: u32 = 0;
+const REMEDIATION_SLAVE_READ: u32 = 1;
+const REMEDIATION_SLAVE_WRITE: u32 = 2;
+
 /// The interrupt handler for the [I2CController]
 pub struct InterruptHandler<T> {
     _phantom: PhantomData<T>,
@@ -31,8 +38,39 @@ pub struct InterruptHandler<T> {
 impl<T: Instance> crate::interrupt::typelevel::Handler<T::Interrupt> for InterruptHandler<T> {
     unsafe fn on_interrupt() {
         T::waker().wake();
-        critical_section::with(|_| {
-            T::regs().smbn_ctl1().modify(|_, w| w.inten().clear_bit());
+        critical_section::with(|_| match T::remediation().load(Ordering::Acquire) {
+            REMEDIATION_SLAVE_READ => {
+                let st = T::regs().smbn_st().read();
+                if st.ber().bit_is_set() || st.negack().bit_is_set() {
+                    T::regs().smbn_fif_cts().write(|w| w.clr_fifo().set_bit());
+                    T::regs().smbn_st().write(|w| w.negack().set_bit().ber().set_bit());
+                    T::regs().smbn_ctl1().modify(|_, w| w.inten().clear_bit());
+                    T::remediation().store(REMEDIATION_NONE, Ordering::Release);
+                } else {
+                    for _ in 0..GROUP_SIZE {
+                        T::regs().smbn_sda().write(|w| unsafe { w.bits(0xFF) });
+                    }
+                    T::regs().smbn_txf_sts().write(|w| w.tx_thst().set_bit());
+                }
+            }
+            REMEDIATION_SLAVE_WRITE => {
+                let st = T::regs().smbn_st().read();
+                let fif_cts = T::regs().smbn_fif_cts().read();
+                if st.ber().bit_is_set() || st.slvstp().bit_is_set() || fif_cts.slvrstr().bit_is_set() {
+                    T::regs().smbn_fif_cts().write(|w| w.clr_fifo().set_bit());
+                    T::regs().smbn_st().write(|w| w.ber().set_bit().slvstp().set_bit());
+                    T::regs().smbn_ctl1().modify(|_, w| w.inten().clear_bit());
+                    T::remediation().store(REMEDIATION_NONE, Ordering::Release);
+                } else {
+                    for _ in 0..GROUP_SIZE {
+                        let _ = T::regs().smbn_sda().read();
+                    }
+                    T::regs().smbn_rxf_sts().write(|w| w.rx_thst().set_bit());
+                }
+            }
+            _ => {
+                T::regs().smbn_ctl1().modify(|_, w| w.inten().clear_bit());
+            }
         });
     }
 }
@@ -135,6 +173,8 @@ impl embedded_hal_async::i2c::Error for Error {
 pub enum ListenError {
     /// The given list of addresses has something wrong with it
     InvalidAddressList,
+    /// Something went wrong on the bus.
+    BusError,
 }
 
 /// Commands the user has to handle in the listen code
@@ -178,10 +218,13 @@ impl Peripheral for AnySMB {
 }
 
 /// An instance of the I2C driver
+///
+/// Note, although this has target support, it doesn't support sending negative acknowledgements as a target.
 pub struct I2CController<'a> {
     _dev: PeripheralRef<'a, AnySMB>,
     regs: &'static crate::pac::smb0::RegisterBlock,
     waker: &'static AtomicWaker,
+    remediation: &'static AtomicU32,
 }
 
 trait IteratorExt: ExactSizeIterator + Sized {
@@ -474,7 +517,10 @@ impl<'p> I2CController<'p> {
             _dev: peri.map_into(),
             regs: T::regs(),
             waker: T::waker(),
+            remediation: T::remediation(),
         };
+
+        dev.remediation.store(REMEDIATION_NONE, Ordering::Release);
 
         dev.regs.smbn_ctl3().write(|w| {
             w.scl_lvl()
@@ -863,7 +909,8 @@ impl<'p> I2CController<'p> {
             .await
     }
 
-    fn configure_addresses(&mut self, addresses: &[u8]) -> Result<(), ListenError> {
+    /// Set the addresses on which to listen.
+    pub async fn configure_addresses(&mut self, addresses: &[u8]) -> Result<(), ListenError> {
         let mut cnt = 0;
         for (i, addr) in addresses.iter().copied().enumerate() {
             if addr & 0x80 != 0 {
@@ -884,7 +931,20 @@ impl<'p> I2CController<'p> {
             return Err(ListenError::InvalidAddressList);
         }
 
-        // Store the addresses in the address registers
+        // Disable previous addresses.
+        self.disable_addresses();
+
+        // Handle any still pending match
+        while self.regs.smbn_st().read().nmatch().bit_is_set() {
+            if self.decode_addr().is_some() {
+                // Drop it immediately to handle the transaction in the default way.
+                let _ = self.listen().await;
+            } else {
+                self.regs.smbn_st().write(|w| w.nmatch().set_bit());
+            }
+        }
+
+        // Store the new addresses in the address registers
         let mut addr_reg_index = 0;
         self.bank_sel(false);
         for addr in addresses.iter().copied() {
@@ -933,6 +993,9 @@ impl<'p> I2CController<'p> {
             }
         }
         self.bank_sel(true);
+
+        // And enable interrupts for listen.
+        self.regs.smbn_ctl1().modify(|_, w| w.nminte().set_bit());
 
         Ok(())
     }
@@ -999,73 +1062,66 @@ impl<'p> I2CController<'p> {
             }
         }
     }
+}
 
-    async fn handle_listen_transaction(&mut self, mut handler: impl FnMut(u8, ListenCommand)) {
-        let Some(addr) = self.decode_addr() else {
-            // Spurious nmatch, clear it and return
-            self.regs.smbn_st().write(|w| w.nmatch().set_bit());
-            return;
-        };
+impl AsyncI2cTarget for I2CController<'_> {
+    type Error = ListenError;
 
-        let mut buffer = [0u8; GROUP_SIZE as _];
+    type Read<'a>
+        = ReadHandler<'a>
+    where
+        Self: 'a;
 
-        if self.regs.smbn_st().read().xmit().bit_is_set() {
-            // Read from master
-            self.regs.smbn_st().write(|w| w.nmatch().set_bit());
+    type Write<'a>
+        = WriteHandler<'a>
+    where
+        Self: 'a;
 
-            let mut bytes_read = 0usize;
-
-            let st = loop {
-                handler(addr, ListenCommand::PrepareRead(&mut buffer));
-
-                for b in buffer {
-                    self.regs.smbn_sda().write(|w| unsafe { w.bits(b) });
-                }
-                self.regs
-                    .smbn_txf_ctl()
-                    .modify(|_, w| unsafe { w.tx_thr().bits(FIFO_SIZE - GROUP_SIZE).thr_txie().set_bit() });
-                self.regs.smbn_txf_sts().write(|w| w.tx_thst().set_bit());
-                bytes_read += GROUP_SIZE as usize;
-
-                let st = self
-                    .wait_for(|| {
-                        let st = self.regs.smbn_st().read();
-                        let txf_sts = self.regs.smbn_txf_sts().read();
-                        if txf_sts.tx_thst().bit_is_set()
-                            || st.ber().bit_is_set()
-                            || st.negack().bit_is_set()
-                            || st.sdast().bit_is_set()
-                        {
-                            Some(st)
-                        } else {
-                            None
-                        }
-                    })
-                    .await;
-
-                if st.ber().bit_is_set() || st.negack().bit_is_set() {
-                    break st;
-                }
-            };
+    async fn listen(&mut self) -> Result<Transaction<Self::Read<'_>, Self::Write<'_>>, Self::Error> {
+        let addr = loop {
+            let st = self
+                .wait_for(|| {
+                    let st = self.regs.smbn_st().read();
+                    if st.ber().bit_is_set() || st.slvstp().bit_is_set() || st.nmatch().bit_is_set() {
+                        Some(st)
+                    } else {
+                        None
+                    }
+                })
+                .await;
 
             if st.ber().bit_is_set() {
-                handler(0, ListenCommand::BusError);
+                self.regs.smbn_fif_cts().write(|w| w.clr_fifo().set_bit());
+                self.regs.smbn_st().write(|w| w.ber().set_bit());
+                return Err(ListenError::BusError);
             }
 
-            bytes_read -= self.regs.smbn_txf_sts().read().tx_bytes().bits() as usize;
+            if st.slvstp().bit_is_set() {
+                self.regs.smbn_st().write(|w| w.slvstp().set_bit());
+                return Ok(Transaction::Deselect);
+            }
 
-            handler(addr, ListenCommand::ReadFinished(bytes_read));
+            let Some(addr) = self.decode_addr() else {
+                self.regs.smbn_st().write(|w| w.nmatch().set_bit());
+                continue;
+            };
 
-            // Reset so we can wait for the next transaction
-            self.regs.smbn_txf_ctl().modify(|_, w| w.thr_txie().clear_bit());
-            self.regs.smbn_fif_cts().write(|w| w.clr_fifo().set_bit());
-            // Clearing the ber bit is enough to handle the bus error.
-            self.regs.smbn_st().write(|w| w.ber().set_bit().negack().set_bit());
+            break addr;
+        };
+
+        if self.regs.smbn_st().read().xmit().bit_is_set() {
+            self.regs.smbn_st().write(|w| w.nmatch().set_bit());
+            Ok(Transaction::Read {
+                address: AnyAddress::Seven(addr),
+                handler: ReadHandler {
+                    _lifetime: PhantomData,
+                    regs: self.regs,
+                    waker: self.waker,
+                    remediation: self.remediation,
+                },
+            })
         } else {
-            // Write from master
-
-            // Start receiving bytes
-            // Note that we wait till we have 1 byte more than the group size to ensure slvrstr is always triggered when relevant
+            // Wait for one more than group size to catch all restarts!
             self.regs.smbn_rxf_ctl().write(|w| unsafe {
                 w.last_pec()
                     .clear_bit()
@@ -1075,141 +1131,224 @@ impl<'p> I2CController<'p> {
                     .bits(GROUP_SIZE + 1)
             });
             self.regs.smbn_st().write(|w| w.nmatch().set_bit());
-
-            let st = loop {
-                let (st, fif_cts) = self
-                    .wait_for(|| {
-                        let st = self.regs.smbn_st().read();
-                        let rxf_sts = self.regs.smbn_rxf_sts().read();
-                        let fif_cts = self.regs.smbn_fif_cts().read();
-                        if st.ber().bit_is_set()
-                            || st.slvstp().bit_is_set()
-                            || st.sdast().bit_is_set()
-                            || rxf_sts.rx_thst().bit_is_set()
-                            || fif_cts.slvrstr().bit_is_set()
-                        {
-                            Some((st, fif_cts))
-                        } else {
-                            None
-                        }
-                    })
-                    .await;
-
-                if st.ber().bit_is_set() || st.slvstp().bit_is_set() || fif_cts.slvrstr().bit_is_set() {
-                    break st;
-                }
-
-                for b in buffer.iter_mut() {
-                    *b = self.regs.smbn_sda().read().bits();
-                }
-
-                self.regs.smbn_rxf_sts().write(|w| w.rx_thst().set_bit());
-
-                handler(addr, ListenCommand::PartialWrite(&buffer));
-            };
-
-            if st.ber().bit_is_set() {
-                handler(0, ListenCommand::BusError);
-            }
-
-            // Read remaining bytes
-            let rest = self.regs.smbn_rxf_sts().read().rx_bytes().bits();
-            if rest > GROUP_SIZE {
-                for b in buffer.iter_mut() {
-                    *b = self.regs.smbn_sda().read().bits();
-                }
-
-                handler(addr, ListenCommand::PartialWrite(&buffer));
-                handler(addr, ListenCommand::WriteFinished);
-            }
-
-            for b in buffer.iter_mut().take(rest.into()) {
-                *b = self.regs.smbn_sda().read().bits();
-            }
-
-            handler(addr, ListenCommand::PartialWrite(&buffer[..rest.into()]));
-            handler(addr, ListenCommand::WriteFinished);
-
-            // Reset and prepare for next transaction
-            // Note that we leave slvstp for the caller to deal with
-            self.regs.smbn_rxf_ctl().write(|w| w.thr_rxie().clear_bit());
-            self.regs
-                .smbn_fif_cts()
-                .write(|w| w.clr_fifo().set_bit().slvrstr().set_bit());
-            // Clearing the Ber bit is enough to handle the bus error
-            self.regs.smbn_st().write(|w| w.ber().set_bit());
+            Ok(Transaction::Write {
+                address: AnyAddress::Seven(addr),
+                handler: WriteHandler {
+                    _lifetime: PhantomData,
+                    regs: self.regs,
+                    waker: self.waker,
+                    remediation: self.remediation,
+                },
+            })
         }
     }
+}
 
-    /// Listen for i2c interactions targeting the specified addresses. The handler will be called
-    /// to handle the various transactions. The listening can be stopped by calling the [CancellationToken::cancel] function
-    /// on the given token
-    pub async fn listen(
-        &mut self,
-        addresses: &[u8],
-        mut handler: impl FnMut(u8, ListenCommand),
-        cancellation_token: &CancellationToken,
-    ) -> Result<(), ListenError> {
-        self.regs.smbn_ctl1().modify(|_, w| w.nminte().set_bit());
-        if let Err(e) = self.configure_addresses(addresses) {
-            self.regs.smbn_ctl1().modify(|_, w| w.nminte().clear_bit());
-            return Err(e);
+/// Handler for i2c target reads.
+pub struct ReadHandler<'a> {
+    _lifetime: PhantomData<&'a mut ()>,
+    regs: &'static crate::pac::smb0::RegisterBlock,
+    waker: &'static AtomicWaker,
+    remediation: &'static AtomicU32,
+}
+
+impl ReadHandler<'_> {
+    fn wait_for<O, F: Fn() -> Option<O>>(&mut self, f: F) -> impl Future<Output = O> {
+        WaitForCondition {
+            f,
+            regs: self.regs,
+            waker: self.waker,
+        }
+    }
+}
+
+impl AsyncReadTransaction for ReadHandler<'_> {
+    type Error = ListenError;
+
+    async fn handle_part(mut self, buffer: &[u8]) -> Result<embedded_hal_i2c::ReadResult<Self>, Self::Error> {
+        macro_rules! status_check {
+            ($self:ident, $st:ident, $read:ident) => {
+                if $st.ber().bit_is_set() {
+                    return Err(ListenError::BusError);
+                }
+                if $st.negack().bit_is_set() {
+                    $read -= self.regs.smbn_txf_sts().read().tx_bytes().bits() as usize;
+                    $self.regs.smbn_fif_cts().write(|w| w.clr_fifo().set_bit());
+                    $self.regs.smbn_txf_ctl().write(|w| w.thr_txie().clear_bit());
+                    $self.regs.smbn_st().write(|w| w.negack().set_bit());
+                    // Stop remediation from happening
+                    core::mem::forget($self);
+                    return Ok(ReadResult::Complete($read));
+                }
+            };
         }
 
-        loop {
-            match select(
-                self.wait_for(|| {
-                    if self.regs.smbn_st().read().nmatch().bit_is_set() {
-                        Some(())
+        let mut chunks = buffer.chunks(GROUP_SIZE.into());
+        let Some(first) = chunks.next() else {
+            return Ok(ReadResult::Partial(self));
+        };
+        self.regs
+            .smbn_txf_ctl()
+            .modify(|_, w| unsafe { w.tx_thr().bits(FIFO_SIZE - GROUP_SIZE).thr_txie().set_bit() });
+        let mut read = first.len();
+        for b in first {
+            self.regs.smbn_sda().write(|w| unsafe { w.bits(*b) });
+        }
+        self.regs.smbn_txf_sts().write(|w| w.tx_thst().set_bit());
+        for chunk in chunks {
+            let st = self
+                .wait_for(|| {
+                    let st = self.regs.smbn_st().read();
+                    let txf_sts = self.regs.smbn_txf_sts().read();
+                    if txf_sts.tx_thst().bit_is_set()
+                        || st.ber().bit_is_set()
+                        || st.negack().bit_is_set()
+                        || st.sdast().bit_is_set()
+                    {
+                        Some(st)
                     } else {
                         None
                     }
-                }),
-                cancellation_token.wait_for_cancel(),
-            )
-            .await
-            {
-                embassy_futures::select::Either::First(_) => {
-                    // just continue the loop
-                }
-                embassy_futures::select::Either::Second(_) => {
-                    // cleanup the wait for interrupt
-                    self.regs.smbn_ctl1().modify(|_, w| w.inten().clear_bit());
+                })
+                .await;
 
-                    // disable listening
-                    self.disable_addresses();
+            status_check!(self, st, read);
 
-                    // Only stop if there is no pending transaction, otherwise handle those first
-                    if self.regs.smbn_st().read().nmatch().bit_is_clear() {
-                        self.regs.smbn_ctl1().modify(|_, w| w.nminte().clear_bit());
-                        return Ok(());
-                    }
-                }
+            read += chunk.len();
+            for b in chunk {
+                self.regs.smbn_sda().write(|w| unsafe { w.bits(*b) });
             }
-
-            loop {
-                self.handle_listen_transaction(&mut handler).await;
-
-                // wait for slvstp or a new match
-                let st = self
-                    .wait_for(|| {
-                        let st = self.regs.smbn_st().read();
-                        if st.nmatch().bit_is_set() || st.slvstp().bit_is_set() {
-                            Some(st)
-                        } else {
-                            None
-                        }
-                    })
-                    .await;
-
-                if st.slvstp().bit_is_set() {
-                    break;
-                }
-            }
-
-            // clear the slave stop
-            self.regs.smbn_st().write(|w| w.slvstp().set_bit());
+            self.regs.smbn_txf_sts().write(|w| w.tx_thst().set_bit());
         }
+
+        // Stall bus on threshold, as we can't modify the threshold without being stalled.
+        self.regs.smbn_txf_ctl().modify(|_, w| w.thr_txie().clear_bit());
+
+        let st = self
+            .wait_for(|| {
+                let st = self.regs.smbn_st().read();
+                if st.ber().bit_is_set() || st.negack().bit_is_set() || st.sdast().bit_is_set() {
+                    Some(st)
+                } else {
+                    None
+                }
+            })
+            .await;
+
+        status_check!(self, st, read);
+
+        // Set threshold to 0 to send last bytes
+        self.regs
+            .smbn_txf_ctl()
+            .write(|w| unsafe { w.thr_txie().clear_bit().tx_thr().bits(0) });
+
+        let st = self
+            .wait_for(|| {
+                let st = self.regs.smbn_st().read();
+                if st.ber().bit_is_set() || st.negack().bit_is_set() || st.sdast().bit_is_set() {
+                    Some(st)
+                } else {
+                    None
+                }
+            })
+            .await;
+
+        status_check!(self, st, read);
+
+        Ok(ReadResult::Partial(self))
+    }
+}
+
+impl Drop for ReadHandler<'_> {
+    fn drop(&mut self) {
+        self.regs
+            .smbn_txf_ctl()
+            .modify(|_, w| unsafe { w.tx_thr().bits(FIFO_SIZE - GROUP_SIZE).thr_txie().set_bit() });
+        self.remediation.store(REMEDIATION_SLAVE_READ, Ordering::Release);
+        self.regs.smbn_ctl1().modify(|_, w| w.inten().set_bit());
+    }
+}
+
+/// Handler for i2c target writes.
+pub struct WriteHandler<'a> {
+    _lifetime: PhantomData<&'a mut ()>,
+    regs: &'static crate::pac::smb0::RegisterBlock,
+    waker: &'static AtomicWaker,
+    remediation: &'static AtomicU32,
+}
+
+impl WriteHandler<'_> {
+    fn wait_for<O, F: Fn() -> Option<O>>(&mut self, f: F) -> impl Future<Output = O> {
+        WaitForCondition {
+            f,
+            regs: self.regs,
+            waker: self.waker,
+        }
+    }
+}
+
+impl AsyncWriteTransaction for WriteHandler<'_> {
+    type Error = ListenError;
+
+    async fn handle_part(mut self, buffer: &mut [u8]) -> Result<embedded_hal_i2c::WriteResult<Self>, Self::Error> {
+        let mut total = 0;
+        for chunk in buffer.chunks_mut(GROUP_SIZE.into()) {
+            let (st, fif_cts) = self
+                .wait_for(|| {
+                    let st = self.regs.smbn_st().read();
+                    let rxf_sts = self.regs.smbn_rxf_sts().read();
+                    let fif_cts = self.regs.smbn_fif_cts().read();
+                    if st.ber().bit_is_set()
+                        || st.slvstp().bit_is_set()
+                        || st.sdast().bit_is_set()
+                        || rxf_sts.rx_thst().bit_is_set()
+                        || fif_cts.slvrstr().bit_is_set()
+                    {
+                        Some((st, fif_cts))
+                    } else {
+                        None
+                    }
+                })
+                .await;
+
+            if st.ber().bit_is_set() {
+                self.regs.smbn_fif_cts().modify(|_, w| w.clr_fifo().set_bit());
+                return Err(ListenError::BusError);
+            }
+            if st.slvstp().bit_is_set() || fif_cts.slvrstr().bit_is_set() {
+                // End of write, empty fifo
+                let avail: usize = self.regs.smbn_rxf_sts().read().rx_bytes().bits().into();
+                if avail < chunk.len() {
+                    // we are done after this chunk, so need special handling
+                    total += avail;
+                    for b in chunk.iter_mut().take(avail) {
+                        *b = self.regs.smbn_sda().read().bits();
+                    }
+                    // Reset fifo and slvrstsr bits
+                    self.regs
+                        .smbn_fif_cts()
+                        .modify(|_, w| w.clr_fifo().set_bit().slvrstr().set_bit());
+                    core::mem::forget(self);
+                    return Ok(WriteResult::Complete(total));
+                }
+            }
+
+            // There are enough bytes for at least the current chunk
+            total += chunk.len();
+            for b in chunk {
+                *b = self.regs.smbn_sda().read().bits();
+            }
+            self.regs.smbn_rxf_sts().write(|w| w.rx_thst().set_bit());
+        }
+
+        Ok(WriteResult::Partial(self))
+    }
+}
+
+impl Drop for WriteHandler<'_> {
+    fn drop(&mut self) {
+        self.remediation.store(REMEDIATION_SLAVE_WRITE, Ordering::Release);
+        self.regs.smbn_ctl1().modify(|_, w| w.inten().set_bit());
     }
 }
 
@@ -1224,6 +1363,8 @@ impl I2c for I2CController<'_> {
 }
 
 mod sealed {
+    use core::sync::atomic::AtomicU32;
+
     use embassy_sync::waitqueue::AtomicWaker;
 
     pub trait SealedValidI2CConfig {
@@ -1234,6 +1375,7 @@ mod sealed {
     pub trait SealedInstance {
         fn waker() -> &'static AtomicWaker;
         fn regs() -> &'static crate::pac::smb0::RegisterBlock;
+        fn remediation() -> &'static AtomicU32;
         /// Safety: should only be called after clock init
         unsafe fn clockfreq() -> u32;
     }
@@ -1259,6 +1401,11 @@ macro_rules! impl_instance {
             fn regs() -> &'static crate::pac::smb0::RegisterBlock {
                 // Safety: not owned, memory is always present
                 unsafe { &*crate::pac::$pac::PTR }
+            }
+
+            fn remediation() -> &'static AtomicU32 {
+                static REMEDIATION: AtomicU32 = AtomicU32::new(REMEDIATION_NONE);
+                &REMEDIATION
             }
 
             unsafe fn clockfreq() -> u32 {

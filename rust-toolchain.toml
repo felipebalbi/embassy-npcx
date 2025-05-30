@@ -1,3 +1,2 @@
 [toolchain]
-channel = "1.84"
 targets = ["thumbv7em-none-eabihf"]

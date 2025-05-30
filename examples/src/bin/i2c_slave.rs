@@ -1,14 +1,17 @@
 #![no_main]
 #![no_std]
 
+use defmt::info;
 use embassy_executor::Spawner;
-use embassy_npcx::cancellation::CancellationToken;
 use embassy_npcx::cdcg::VoscClockMode;
-use embassy_npcx::i2c::{self, I2CController, ListenCommand};
+use embassy_npcx::i2c::{self, I2CController};
 use embassy_npcx::{bind_interrupts, peripherals, Config};
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::signal::Signal;
 use embedded_hal::i2c::Operation;
+use embedded_hal_i2c::{
+    AnyAddress, AsyncI2cTarget, AsyncReadTransaction, AsyncWriteTransaction, TransactionExpectEither, WriteResult,
+};
 use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(pub struct Irqs {
@@ -18,62 +21,116 @@ bind_interrupts!(pub struct Irqs {
 
 static SIG: Signal<ThreadModeRawMutex, ()> = Signal::new();
 
+const BUFLEN: usize = 512;
+const SLAVE_ADDR: AnyAddress = AnyAddress::Seven(30);
+
 #[embassy_executor::task]
 async fn device(mut i2c: I2CController<'static>) {
-    let mut flash_data = [0u8; 256];
-    let mut cur_addr = 0u8;
-    let mut read_addr = 0u8;
-    let mut in_transaction = false;
-
-    let cancellation_token = CancellationToken::new();
+    i2c.configure_addresses(&[30]).await.unwrap();
 
     SIG.signal(());
-    i2c.listen(
-        &[30],
-        move |_, command| match command {
-            ListenCommand::PartialWrite(items) => {
-                let data = if !in_transaction {
-                    if let Some((addr, data)) = items.split_first() {
-                        in_transaction = true;
-                        cur_addr = *addr;
-                        data
-                    } else {
-                        &[]
-                    }
-                } else {
-                    items
-                };
 
-                for b in data.iter().copied() {
-                    flash_data[cur_addr as usize] = b;
-                    cur_addr = cur_addr.wrapping_add(1);
+    // Implement a simple i2c RAM, demonstrating the features
+    // of the new interface.
+
+    let mut buf = [0u8; BUFLEN];
+    let mut cur_addr = 0usize;
+
+    let mut expect_read = false;
+
+    loop {
+        let mut addr = [0u8; 2];
+        let result: TransactionExpectEither<_, _> = if expect_read && cur_addr < BUFLEN {
+            i2c.listen_expect_read(SLAVE_ADDR, buf.get(cur_addr..).unwrap_or_default())
+                .await
+                .unwrap()
+                .into()
+        } else {
+            i2c.listen_expect_write(SLAVE_ADDR, &mut addr).await.unwrap().into()
+        };
+
+        use TransactionExpectEither::*;
+        match result {
+            Deselect => {
+                expect_read = false;
+                info!("Deselection detected");
+            }
+            Read { handler, .. } => {
+                if cur_addr >= BUFLEN {
+                    // No valid address, so can't facilitate a read, nack it.
+                    info!("Rejected read transaction, no valid start address");
+                    drop(handler);
+                } else {
+                    // Provide the data for the read, and then let go of the bus after.
+                    let size = handler.handle_complete(&buf[cur_addr..], 0xFF).await.unwrap();
+                    info!(
+                        "Read transaction starting at addr {}, provided {} bytes",
+                        cur_addr, size
+                    );
+                    cur_addr = cur_addr.saturating_add(size).min(BUFLEN);
                 }
             }
-            ListenCommand::WriteFinished => {
-                in_transaction = false;
+            ExpectedCompleteRead { size } => {
+                info!(
+                    "Expected read transaction starting at addr {}, provided {} bytes",
+                    cur_addr, size
+                );
+                cur_addr = cur_addr.saturating_add(size).min(BUFLEN);
             }
-            ListenCommand::PrepareRead(items) => {
-                if !in_transaction {
-                    read_addr = cur_addr;
-                    in_transaction = true;
+            ExpectedPartialRead { handler } => {
+                let size =
+                    buf.get(cur_addr..).unwrap_or_default().len() + handler.handle_complete(&[], 0xFF).await.unwrap();
+                info!(
+                    "Expected partial read transaction starting at addr {}, provided {} bytes",
+                    cur_addr, size
+                );
+                cur_addr = cur_addr.saturating_add(size).min(BUFLEN);
+            }
+            Write { handler, .. } => {
+                info!("Write request");
+                let mut addr = [0u8; 2];
+                match handler.handle_part(&mut addr).await.unwrap() {
+                    WriteResult::Partial(handler) => {
+                        let new_addr: usize = u16::from_le_bytes(addr).into();
+                        if new_addr < BUFLEN {
+                            cur_addr = new_addr;
+                            info!("Received addr {}", cur_addr);
+                            expect_read = true;
+
+                            let size_written = handler.handle_complete(&mut buf[cur_addr..]).await.unwrap();
+                            cur_addr += size_written;
+                            info!("Received write of {} bytes to ram", size_written);
+                        } else {
+                            // Invalid address, nack it
+                            drop(handler);
+                        }
+                    }
+                    WriteResult::Complete(size) => {
+                        info!("Incomplete address write of size {} received, ignoring", size);
+                    }
+                };
+            }
+            ExpectedCompleteWrite { size } => {
+                info!("Expected incomplete address write of size {} received, ignoring", size);
+            }
+            ExpectedPartialWrite { handler } => {
+                info!("Expected partial write");
+                let new_addr: usize = u16::from_le_bytes(addr).into();
+                if new_addr < BUFLEN {
+                    cur_addr = new_addr;
+                    info!("Received addr {}", cur_addr);
+                    expect_read = true;
+
+                    let size_written = handler.handle_complete(&mut buf[cur_addr..]).await.unwrap();
+                    cur_addr += size_written;
+                    info!("Received write of {} bytes to ram", size_written);
+                } else {
+                    // Invalid address, nack it
+                    drop(handler);
                 }
-                for b in items.iter_mut() {
-                    *b = flash_data[read_addr as usize];
-                    read_addr = read_addr.wrapping_add(1);
-                }
             }
-            ListenCommand::ReadFinished(read) => {
-                in_transaction = false;
-                cur_addr = cur_addr.wrapping_add(read as u8);
-            }
-            ListenCommand::BusError => {
-                defmt::info!("A bus error occured");
-            }
-        },
-        &cancellation_token,
-    )
-    .await
-    .unwrap();
+        }
+    }
 }
 
 #[embassy_executor::main]
@@ -113,19 +170,17 @@ async fn main(spawner: Spawner) {
     spawner.must_spawn(device(i2cdevice));
     SIG.wait().await;
 
-    let mut output = [0u8; 128];
-    let mut target = [0u8; 256];
-    for i in 0u8..=255 {
-        target[i as usize] = i;
-    }
-
-    i2c.transaction(30, &mut [Operation::Write(&[0]), Operation::Write(&target)])
+    let mut buf = [0; 8];
+    i2c.transaction(
+        30,
+        &mut [Operation::Write(&[
+            16, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+        ])],
+    )
+    .await
+    .unwrap();
+    i2c.transaction(30, &mut [Operation::Write(&[20, 0]), Operation::Read(&mut buf)])
         .await
         .unwrap();
-
-    i2c.transaction(30, &mut [Operation::Write(&[0x20]), Operation::Read(&mut output)])
-        .await
-        .unwrap();
-
-    defmt::info!("Read: {:?}", output);
+    defmt::info!("Read {}", buf);
 }

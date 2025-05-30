@@ -1,8 +1,13 @@
 //! Partial low-level implementation for the MFT16 timer.
 
-use crate::{interrupt::typelevel::Interrupt, timer::MultiFunctionInstance};
-use core::{future::poll_fn, marker::PhantomData, task::Poll};
+use core::future::poll_fn;
+use core::marker::PhantomData;
+use core::task::Poll;
+
 use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
+
+use crate::interrupt::typelevel::Interrupt;
+use crate::timer::MultiFunctionInstance;
 
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]

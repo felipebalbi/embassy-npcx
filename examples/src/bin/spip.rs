@@ -2,19 +2,15 @@
 #![no_std]
 
 use cortex_m::asm::delay;
-use defmt_rtt as _;
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice as MutexSpiDevice;
 use embassy_executor::Spawner;
-use embassy_npcx::{
-    self as hal, bind_interrupts,
-    gpio::{Level, OutputOnly, OutputOpenDrain},
-    peripherals::SPIP,
-    spip::Spip,
-    Config,
-};
+use embassy_npcx::gpio::{Level, OutputOnly, OutputOpenDrain};
+use embassy_npcx::peripherals::SPIP;
+use embassy_npcx::spip::Spip;
+use embassy_npcx::{self as hal, bind_interrupts, Config};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::mutex::Mutex;
-use panic_probe as _;
+use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(struct Irqs {
     SPIP => hal::spip::InterruptHandler<SPIP>;
