@@ -223,7 +223,7 @@ jobs:
       fail-fast: false
       matrix:
         commit: ${{ fromJSON(needs.commit_list.outputs.commits) }}
-        msrv: ["1.84"] # We're using `&raw`, introduced in 1.84
+        msrv: ["1.85"] # We're using edition 2024 in a dependency, introduced in 1.85
     name: ubuntu / ${{ matrix.msrv }} (${{ matrix.commit }})
     steps:
       - uses: actions/checkout@v4

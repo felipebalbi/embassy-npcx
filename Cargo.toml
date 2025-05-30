@@ -9,7 +9,7 @@ readme = "README.md"
 keywords = [ "embedded", "async", "npcx490m", "nuvoton", "embedded-hal" ]
 categories = [ "embedded", "hardware-support", "no-std", "asynchronous" ]
 repository = "https://github.com/OpenDevicePartnership/embassy-npcx"
-rust-version = "1.84.0"
+rust-version = "1.85.0"
 
 [features]
 default = ["rt"]
@@ -29,6 +29,7 @@ time-driver-mft16-3 = ["_time-driver"]
 
 [dependencies]
 npcx490m-pac = { git = "https://github.com/OpenDevicePartnership/npcx490m-pac", rev = "b7d1756a07d682a0f15e462710cc59b170effa3c", features = ["critical-section"] }
+embedded-hal-i2c = { git = "https://github.com/tweedegolf/embedded-hal-i2c.git", branch = "main" }
 embassy-hal-internal = { version = "=0.2.0", features = ["cortex-m", "prio-bits-4"] }
 embassy-sync = "0.6.2"
 embassy-futures = "0.1.1"

@@ -2,11 +2,18 @@
 //!
 //! Implements the general purpose SPI Peripheral Interface that enables the connection of SPI-based peripheral devices.
 
-use crate::{cdcg, interrupt::typelevel::Interrupt, pac, peripherals::SPIP};
-use core::{convert::Infallible, future::poll_fn, marker::PhantomData, task::Poll};
+use core::convert::Infallible;
+use core::future::poll_fn;
+use core::marker::PhantomData;
+use core::task::Poll;
+
 use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
 use embassy_sync::waitqueue::AtomicWaker;
 use embedded_hal::spi::{Mode, Phase, Polarity, MODE_0};
+
+use crate::interrupt::typelevel::Interrupt;
+use crate::peripherals::SPIP;
+use crate::{cdcg, pac};
 
 /// Pin that can be used as SPIP Mosi.
 pub type MosiPin = crate::peripherals::PK12;
