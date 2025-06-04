@@ -11,7 +11,7 @@ use core::marker::PhantomData;
 use core::sync::atomic::{AtomicU8, Ordering};
 use core::task::Poll;
 
-use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
+use embassy_hal_internal::{impl_peripheral, Peri};
 use embassy_sync::waitqueue::AtomicWaker;
 
 use crate::interrupt::typelevel::Interrupt;
@@ -116,19 +116,8 @@ impl<T: Instance> From<T> for AnyUart {
     }
 }
 
-// Allow use of PeripheralRef to do lifetime management
-impl Peripheral for AnyUart {
-    type P = AnyUart;
-
-    unsafe fn clone_unchecked(&self) -> Self::P {
-        AnyUart {
-            regs: self.regs,
-            rx_waker: self.rx_waker,
-            tx_waker: self.tx_waker,
-            state: self.state,
-        }
-    }
-}
+// Allow use of Peri to do lifetime management
+impl_peripheral!(AnyUart);
 
 /// Core Universal Asynchronous Receiver-Transmitter (CR_UART) driver.
 pub struct Uart<'a, T> {
@@ -271,14 +260,11 @@ impl<'a, T: Instance + 'a> Uart<'a, T> {
         Self::configure_enable(config.base);
     }
 
-    fn instantiate_rx_tx(peri: impl Peripheral<P = T> + 'a) -> Self {
-        into_ref!(peri);
-        let peri: PeripheralRef<'_, AnyUart> = peri.map_into();
-
+    fn instantiate_rx_tx(peri: Peri<'a, T>) -> Self {
         // Safety: we ensure that UartRx and UartTx can work at the same time.
         Self {
-            rx: UartRx::<'a>::new(unsafe { peri.clone_unchecked() }),
-            tx: UartTx::<'a>::new(peri),
+            rx: UartRx::<'a>::new(unsafe { peri.clone_unchecked().into() }),
+            tx: UartTx::<'a>::new(peri.into()),
             peripheral: Default::default(),
         }
     }
@@ -292,9 +278,9 @@ impl<'a, T: Instance + 'a> Uart<'a, T> {
 
     /// Enables the peripheral in "Separate Mode" with applicable input and output pins.
     pub fn new<Sin: InputPin, Sout: OutputPin>(
-        peri: impl Peripheral<P = T> + 'a,
-        _sin: impl Peripheral<P = Sin> + 'a,
-        _sout: impl Peripheral<P = Sout> + 'a,
+        peri: Peri<'a, T>,
+        _sin: Peri<'a, Sin>,
+        _sout: Peri<'a, Sout>,
         _irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>,
         config: Config,
     ) -> Self {
@@ -314,8 +300,8 @@ impl<'a, T: Instance + 'a> Uart<'a, T> {
 
     /// Enables the peripheral in "Separate Mode" with applicable input pin.
     pub fn new_rx<Sin: InputPin>(
-        peri: impl Peripheral<P = T> + 'a,
-        _sin: impl Peripheral<P = Sin> + 'a,
+        peri: Peri<'a, T>,
+        _sin: Peri<'a, Sin>,
         _irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>,
         config: Config,
     ) -> UartRx<'a> {
@@ -330,14 +316,13 @@ impl<'a, T: Instance + 'a> Uart<'a, T> {
 
         Self::configure_enable(config);
 
-        into_ref!(peri);
-        UartRx::new(peri.map_into())
+        UartRx::new(peri.into())
     }
 
     /// Enables the peripheral in "Separate Mode" with applicable output pin.
     pub fn new_tx<Sout: OutputPin>(
-        peri: impl Peripheral<P = T> + 'a,
-        _sout: impl Peripheral<P = Sout> + 'a,
+        peri: Peri<'a, T>,
+        _sout: Peri<'a, Sout>,
         _irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>,
         config: Config,
     ) -> UartTx<'a> {
@@ -352,14 +337,13 @@ impl<'a, T: Instance + 'a> Uart<'a, T> {
 
         Self::configure_enable(config);
 
-        into_ref!(peri);
-        UartTx::new(peri.map_into())
+        UartTx::new(peri.into())
     }
 
     /// Enables the peripheral in "Common Mode" by using an applicable input pin as both input and output.
     pub fn new_common<Scom: CommonPin>(
-        peri: impl Peripheral<P = T> + 'a,
-        _scom: impl Peripheral<P = Scom> + 'a,
+        peri: Peri<'a, T>,
+        _scom: Peri<'a, Scom>,
         _irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>,
         config: CommonModeConfig,
     ) -> Self {
@@ -386,22 +370,22 @@ impl<'a, T: Instance + 'a> Uart<'a, T> {
 
 /// A receive-only uart
 pub struct UartRx<'a> {
-    dev: PeripheralRef<'a, AnyUart>,
+    dev: Peri<'a, AnyUart>,
 }
 
 /// A send-only uart
 pub struct UartTx<'a> {
-    dev: PeripheralRef<'a, AnyUart>,
+    dev: Peri<'a, AnyUart>,
 }
 
 impl<'a> UartRx<'a> {
-    fn new(dev: PeripheralRef<'a, AnyUart>) -> Self {
+    fn new(dev: Peri<'a, AnyUart>) -> Self {
         dev.state.rx_tx_refcount.fetch_add(1, Ordering::AcqRel);
         Self { dev }
     }
 }
 
-fn drop_rx_tx(dev: &PeripheralRef<'_, AnyUart>) {
+fn drop_rx_tx(dev: &Peri<'_, AnyUart>) {
     if dev.state.rx_tx_refcount.fetch_sub(1, Ordering::AcqRel) == 1 {
         // We need to clean up.
 
@@ -417,7 +401,7 @@ impl Drop for UartRx<'_> {
 }
 
 impl<'a> UartTx<'a> {
-    fn new(dev: PeripheralRef<'a, AnyUart>) -> Self {
+    fn new(dev: Peri<'a, AnyUart>) -> Self {
         dev.state.rx_tx_refcount.fetch_add(1, Ordering::AcqRel);
         Self { dev }
     }
@@ -620,6 +604,7 @@ impl State {
 }
 
 mod sealed {
+    use embassy_hal_internal::PeripheralType;
     use embassy_sync::waitqueue::AtomicWaker;
 
     pub trait SealedInstance {
@@ -631,7 +616,7 @@ mod sealed {
         unsafe fn reset(cs: critical_section::CriticalSection);
     }
 
-    pub trait SealedPin {
+    pub trait SealedPin: PeripheralType {
         unsafe fn setup(cs: critical_section::CriticalSection);
     }
 
@@ -643,7 +628,7 @@ mod sealed {
 }
 
 /// A marker trait implemented by all uart peripherals
-pub trait Instance: sealed::SealedInstance + embassy_hal_internal::Peripheral<P = Self> {
+pub trait Instance: sealed::SealedInstance + embassy_hal_internal::PeripheralType {
     /// The interrupt used by this instance
     type Interrupt: crate::interrupt::typelevel::Interrupt;
 }

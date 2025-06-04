@@ -3,7 +3,7 @@
 use core::convert::Infallible;
 use core::ops::{Deref, DerefMut};
 
-use embassy_hal_internal::Peripheral;
+use embassy_hal_internal::Peri;
 
 use crate::gpio::{CanPullUp, Input, InputPin, LowVoltagePin, PullDownOnly};
 use crate::miwu::{Edge, InterruptHandler, Level, WakeUp, WakeUpInput};
@@ -27,8 +27,8 @@ pub struct AwaitableInput<'d, T> {
 impl<'d> AwaitableInput<'d, CanPullUp> {
     /// Create a new input that can be awaited
     pub fn new<PIN, WUI>(
-        pin: impl Peripheral<P = PIN> + 'd,
-        wui: impl Peripheral<P = WUI> + 'd,
+        pin: Peri<'d, PIN>,
+        wui: Peri<'d, WUI>,
         irqs: impl crate::interrupt::typelevel::Binding<WUI::Interrupt, InterruptHandler<WUI>>,
     ) -> Self
     where
@@ -46,8 +46,8 @@ impl<'d> AwaitableInput<'d, CanPullUp> {
 impl<'d> AwaitableInput<'d, PullDownOnly> {
     /// Create a new input that can be awaited
     pub fn new_lowvoltage<PIN, WUI>(
-        pin: impl Peripheral<P = PIN> + 'd,
-        wui: impl Peripheral<P = WUI> + 'd,
+        pin: Peri<'d, PIN>,
+        wui: Peri<'d, WUI>,
         irqs: impl crate::interrupt::typelevel::Binding<WUI::Interrupt, InterruptHandler<WUI>>,
     ) -> Self
     where

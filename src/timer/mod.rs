@@ -6,9 +6,10 @@ pub mod low_level;
 use embassy_sync::waitqueue::AtomicWaker;
 
 mod sealed {
+    use embassy_hal_internal::PeripheralType;
     use embassy_sync::waitqueue::AtomicWaker;
 
-    pub trait SealedMultiFunctionInstance {
+    pub trait SealedMultiFunctionInstance: PeripheralType {
         fn waker() -> &'static AtomicWaker;
         fn regs() -> &'static crate::pac::mft16_1::RegisterBlock;
     }

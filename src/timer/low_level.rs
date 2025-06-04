@@ -4,7 +4,7 @@ use core::future::poll_fn;
 use core::marker::PhantomData;
 use core::task::Poll;
 
-use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
+use embassy_hal_internal::Peri;
 
 use crate::interrupt::typelevel::Interrupt;
 use crate::timer::MultiFunctionInstance;
@@ -144,13 +144,13 @@ impl From<WakeUpEvent> for WakeUpEvents {
 /// In practice this driver is mainly usable in Dual-Independent Timer mode.
 /// Control of clock inputs and the various other modes has not yet been implemented.
 pub struct MultiFunctionTimer<'d, T: MultiFunctionInstance> {
-    _instance: PeripheralRef<'d, T>,
+    _instance: Peri<'d, T>,
 }
 
 impl<'d, T: MultiFunctionInstance> MultiFunctionTimer<'d, T> {
     /// Instantiate the MFT16 driver for this peripheral.
     pub fn new(
-        instance: impl Peripheral<P = T> + 'd,
+        instance: Peri<'d, T>,
         _irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>,
     ) -> Self {
         // Safety: _irqs ensures an interrupt handler is bound
@@ -158,7 +158,6 @@ impl<'d, T: MultiFunctionInstance> MultiFunctionTimer<'d, T> {
             T::Interrupt::enable();
         }
 
-        into_ref!(instance);
         Self { _instance: instance }
     }
 

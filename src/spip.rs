@@ -7,7 +7,7 @@ use core::future::poll_fn;
 use core::marker::PhantomData;
 use core::task::Poll;
 
-use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
+use embassy_hal_internal::{Peri, PeripheralType};
 use embassy_sync::waitqueue::AtomicWaker;
 use embedded_hal::spi::{Mode, Phase, Polarity, MODE_0};
 
@@ -55,7 +55,7 @@ mod sealed {
 }
 
 /// A marker trait implemented by the SPIP peripherals.
-pub trait Instance: Peripheral<P = Self> + sealed::SealedInstance + 'static + Send {
+pub trait Instance: PeripheralType + sealed::SealedInstance + 'static + Send {
     /// The interrupt used by this instance.
     type Interrupt: crate::interrupt::typelevel::Interrupt;
 
@@ -99,7 +99,7 @@ impl<T: Instance> crate::interrupt::typelevel::Handler<T::Interrupt> for Interru
 
 /// Driver for the SPI (Master) Peripheral.
 pub struct Spip<'d, T: Instance, U = u8> {
-    _peri: PeripheralRef<'d, T>,
+    _peri: Peri<'d, T>,
     _mod: PhantomData<U>,
 }
 
@@ -200,16 +200,14 @@ impl<T: Instance, U: SpipPrimitive> Spip<'_, T, U> {
 impl<'d, T: Instance> Spip<'d, T, u8> {
     /// Enables the peripheral in 8-bit word mode with the applicable bus pins.
     pub fn new_8bit(
-        peri: impl Peripheral<P = T> + 'd,
-        mosi: impl Peripheral<P = MosiPin> + 'd,
-        miso: impl Peripheral<P = MisoPin> + 'd,
-        sclk: impl Peripheral<P = SclkPin> + 'd,
-        legacy: impl Peripheral<P = LegacyPin> + 'd,
+        peri: Peri<'d, T>,
+        mosi: Peri<'d, MosiPin>,
+        miso: Peri<'d, MisoPin>,
+        sclk: Peri<'d, SclkPin>,
+        legacy: Peri<'d, LegacyPin>,
         irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>,
         config: Config,
     ) -> Self {
-        into_ref!(peri);
-
         // We only tie the pins to our lifetime, discard.
         let _ = (mosi, miso, sclk, legacy);
 
@@ -225,16 +223,14 @@ impl<'d, T: Instance> Spip<'d, T, u8> {
 impl<'d, T: Instance> Spip<'d, T, u16> {
     /// Enables the peripheral in 16-bit word mode with the applicable bus pins.
     pub fn new_16bit(
-        peri: impl Peripheral<P = T> + 'd,
-        mosi: impl Peripheral<P = MosiPin> + 'd,
-        miso: impl Peripheral<P = MisoPin> + 'd,
-        sclk: impl Peripheral<P = SclkPin> + 'd,
-        legacy: impl Peripheral<P = LegacyPin> + 'd,
+        peri: Peri<'d, T>,
+        mosi: Peri<'d, MosiPin>,
+        miso: Peri<'d, MisoPin>,
+        sclk: Peri<'d, SclkPin>,
+        legacy: Peri<'d, LegacyPin>,
         irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>,
         config: Config,
     ) -> Self {
-        into_ref!(peri);
-
         // We only tie the pins to our lifetime, discard.
         let _ = (mosi, miso, sclk, legacy);
 

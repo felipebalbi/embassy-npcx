@@ -4,7 +4,7 @@ use core::future::Future;
 use core::marker::PhantomData;
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
+use embassy_hal_internal::{impl_peripheral, Peri, PeripheralType};
 use embassy_sync::waitqueue::AtomicWaker;
 pub use embedded_hal_async::i2c::{I2c, Operation};
 use embedded_hal_i2c::{
@@ -208,20 +208,14 @@ impl<T: Instance> From<T> for AnySMB {
     }
 }
 
-// Allow use of PeripheralRef to do lifetime management
-impl Peripheral for AnySMB {
-    type P = AnySMB;
-
-    unsafe fn clone_unchecked(&self) -> Self::P {
-        AnySMB {}
-    }
-}
+// Allow use of Peri to do lifetime management
+impl_peripheral!(AnySMB);
 
 /// An instance of the I2C driver
 ///
 /// Note, although this has target support, it doesn't support sending negative acknowledgements as a target.
 pub struct I2CController<'a> {
-    _dev: PeripheralRef<'a, AnySMB>,
+    _dev: Peri<'a, AnySMB>,
     regs: &'static crate::pac::smb0::RegisterBlock,
     waker: &'static AtomicWaker,
     remediation: &'static AtomicU32,
@@ -481,9 +475,9 @@ impl<'p> I2CController<'p> {
 
     /// Create a new instance of I2C
     pub fn new<T: Instance + 'p, Scl: Pin, Sda: Pin, Mode>(
-        peri: impl Peripheral<P = T> + 'p,
-        scl: impl Peripheral<P = Scl> + 'p,
-        sda: impl Peripheral<P = Sda> + 'p,
+        peri: Peri<'p, T>,
+        scl: Peri<'p, Scl>,
+        sda: Peri<'p, Sda>,
         _irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>,
         _mode: Mode,
         config: Config,
@@ -495,10 +489,6 @@ impl<'p> I2CController<'p> {
         unsafe {
             T::Interrupt::enable();
         }
-
-        into_ref!(peri);
-        into_ref!(scl);
-        into_ref!(sda);
 
         critical_section::with(|cs| {
             // Safety: We are disabling low voltage mode and exclusively own the peripherals
@@ -514,7 +504,7 @@ impl<'p> I2CController<'p> {
         });
 
         let mut dev = Self {
-            _dev: peri.map_into(),
+            _dev: peri.into(),
             regs: T::regs(),
             waker: T::waker(),
             remediation: T::remediation(),
@@ -1385,7 +1375,7 @@ mod sealed {
 pub trait ValidI2CConfig: sealed::SealedValidI2CConfig {}
 
 /// A marker trait implemented for all peripherals that can do I2C
-pub trait Instance: sealed::SealedInstance + embassy_hal_internal::Peripheral<P = Self> {
+pub trait Instance: sealed::SealedInstance + PeripheralType + 'static + Send {
     /// The interrupt use by this instance
     type Interrupt: crate::interrupt::typelevel::Interrupt;
 }
