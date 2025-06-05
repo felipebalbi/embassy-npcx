@@ -7,6 +7,7 @@ pub mod cdcg;
 pub mod gpio;
 pub mod gpio_miwu;
 pub mod i2c;
+pub mod keyboard;
 pub mod miwu;
 pub mod spip;
 pub mod timer;
@@ -371,6 +372,7 @@ embassy_hal_internal::peripherals!(
     CR_UART2,
     CR_UART3,
     CR_UART4,
+    KBS,
     SPIP,
     #[cfg(not(feature = "time-driver-mft16-1"))]
     MFT16_1,
