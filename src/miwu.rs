@@ -11,7 +11,7 @@
 //! * View [AwaitableInput](crate::gpio_miwu::AwaitableInput) to configure an pin interrupt.
 //! * These WakeUpInputs can be consumed by the HAL implementation for specific peripherals unrelated to GPIO pins.
 
-use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
+use embassy_hal_internal::{impl_peripheral, Peri};
 use embassy_sync::waitqueue::AtomicWaker;
 use paste::paste;
 
@@ -54,9 +54,10 @@ impl From<Edge> for Mode {
 }
 
 mod sealed {
+    use embassy_hal_internal::PeripheralType;
     use embassy_sync::waitqueue::AtomicWaker;
 
-    pub(crate) trait SealedWakeUpInput {
+    pub(crate) trait SealedWakeUpInput: PeripheralType {
         fn waker() -> &'static AtomicWaker;
 
         fn port() -> &'static crate::pac::miwu0::RegisterBlock;
@@ -74,13 +75,13 @@ pub trait WakeUpInput: sealed::SealedWakeUpInput {
 
 /// WakeUpInput (WUI) driver.
 pub struct WakeUp<'d> {
-    wui: PeripheralRef<'d, AnyWakeUpInput>,
+    wui: Peri<'d, AnyWakeUpInput>,
 }
 
 impl<'d> WakeUp<'d> {
     /// Construct the WakeUp driver without enabling the signalling condition.
     pub fn new<P: WakeUpInput + 'd>(
-        wui: impl Peripheral<P = P> + 'd,
+        wui: Peri<'d, P>,
         _irqs: impl crate::interrupt::typelevel::Binding<P::Interrupt, InterruptHandler<P>>,
     ) -> Self {
         // Safety: _irqs ensures an interrupt handler is bound
@@ -89,8 +90,7 @@ impl<'d> WakeUp<'d> {
             P::Interrupt::enable();
         }
 
-        into_ref!(wui);
-        Self { wui: wui.map_into() }
+        Self { wui: wui.into() }
     }
 
     /// Enable the [WakeUpInput] with a specific signalling condition [Mode], enabling triggering the WakeUp signal and/or interrupt.
@@ -193,18 +193,7 @@ struct AnyWakeUpInput {
 }
 
 // Allow use of PeripheralRef to do lifetime management
-impl Peripheral for AnyWakeUpInput {
-    type P = AnyWakeUpInput;
-
-    unsafe fn clone_unchecked(&self) -> Self::P {
-        AnyWakeUpInput {
-            waker: self.waker,
-            port: self.port,
-            group: self.group,
-            subgroup: self.subgroup,
-        }
-    }
-}
+impl_peripheral!(AnyWakeUpInput);
 
 impl<T: WakeUpInput> From<T> for AnyWakeUpInput {
     fn from(_value: T) -> Self {

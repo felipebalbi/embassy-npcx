@@ -2,7 +2,7 @@
 
 use core::marker::PhantomData;
 
-use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
+use embassy_hal_internal::{impl_peripheral, Peri};
 use paste::paste;
 
 /// The level of a pin
@@ -34,20 +34,22 @@ impl From<bool> for Level {
 }
 
 pub(crate) mod sealed {
-    pub trait SealedPin {
+    use embassy_hal_internal::PeripheralType;
+
+    pub trait SealedPin: PeripheralType {
         #[must_use]
         fn pin(&self) -> u8;
 
         #[must_use]
         fn port(&self) -> &'static crate::pac::gpio0::RegisterBlock;
 
-        // Not ideal to mark this unsafe, but PeripheralRef is missing DerefMut...
+        // Not ideal to mark this unsafe, but Peri is missing DerefMut...
         /// Safety assumptions:
         /// caller must ensure it has a mutable reference to the pin or
         /// has otherwise elimnated contention.
         unsafe fn set_pin_function(&self, cs: critical_section::CriticalSection);
 
-        // Not ideal to mark this unsafe, but PeripheralRef is missing DerefMut...
+        // Not ideal to mark this unsafe, but Peri is missing DerefMut...
         /// Change whether the pin is low voltage, may do nothing on pins without
         /// low voltage support.
         /// Safety assumptions:
@@ -58,9 +60,9 @@ pub(crate) mod sealed {
         unsafe fn set_low_voltage(&self, cs: critical_section::CriticalSection, state: bool);
     }
 
-    pub trait SealedInputPin {}
+    pub trait SealedInputPin: PeripheralType {}
 
-    pub trait SealedLowVoltagePin {}
+    pub trait SealedLowVoltagePin: PeripheralType {}
 }
 
 struct AnyPin {
@@ -89,17 +91,8 @@ impl<T: Pin> From<T> for AnyPin {
     }
 }
 
-// Allow use of PeripheralRef to do lifetime management
-impl Peripheral for AnyPin {
-    type P = AnyPin;
-
-    unsafe fn clone_unchecked(&self) -> Self::P {
-        AnyPin {
-            pin: self.pin,
-            port: self.port,
-        }
-    }
-}
+// Allow use of PeripheralType to do lifetime management
+impl_peripheral!(AnyPin);
 
 /// This pin can only be an output
 pub struct OutputOnly {}
@@ -113,18 +106,16 @@ pub struct PullDownOnly {}
 
 /// A pin configured in input mode
 pub struct Input<'d, T> {
-    pin: PeripheralRef<'d, AnyPin>,
+    pin: Peri<'d, AnyPin>,
     _phantom: PhantomData<T>,
 }
 
 impl<'d> Input<'d, CanPullUp> {
     /// Configure the pin in input mode
-    pub fn new(pin: impl Peripheral<P = impl InputPin + 'd> + 'd) -> Self {
-        into_ref!(pin);
-
+    pub fn new(pin: Peri<'d, impl InputPin>) -> Self {
         critical_section::with(|cs| {
             // Safety:
-            // We have a mutable reference to the pin through PeripheralRef
+            // We have a mutable reference to the pin through Peri
             unsafe { pin.set_low_voltage(cs, false) };
             unsafe { pin.set_pin_function(cs) };
 
@@ -134,7 +125,7 @@ impl<'d> Input<'d, CanPullUp> {
         });
 
         Input {
-            pin: pin.map_into(),
+            pin: pin.into(),
             _phantom: PhantomData,
         }
     }
@@ -162,9 +153,7 @@ impl<'d> Input<'d, CanPullUp> {
 
 impl<'d> Input<'d, PullDownOnly> {
     /// Put a low voltage pin in input name
-    pub fn new_lowvoltage(pin: impl Peripheral<P = impl LowVoltagePin + 'd> + 'd) -> Self {
-        into_ref!(pin);
-
+    pub fn new_lowvoltage(pin: Peri<'d, impl LowVoltagePin>) -> Self {
         critical_section::with(|cs| {
             let regs = pin.port();
 
@@ -174,14 +163,14 @@ impl<'d> Input<'d, PullDownOnly> {
             regs.px_otype().modify(|_, w| w.pin(pin.pin()).opendrain());
 
             // Safety:
-            // We have a mutable reference to the pin through PeripheralRef
+            // We have a mutable reference to the pin through Peri
             // Everything is put in a safe state for low voltage above
             unsafe { pin.set_pin_function(cs) };
             unsafe { pin.set_low_voltage(cs, true) };
         });
 
         Self {
-            pin: pin.map_into(),
+            pin: pin.into(),
             _phantom: PhantomData,
         }
     }
@@ -232,18 +221,16 @@ impl<T> Input<'_, T> {
 
 /// A pin that is configured as open-drain
 pub struct OutputOpenDrain<'d, T> {
-    pin: PeripheralRef<'d, AnyPin>,
+    pin: Peri<'d, AnyPin>,
     _phantom: PhantomData<T>,
 }
 
 impl<'d> OutputOpenDrain<'d, OutputOnly> {
     /// Configure a pin as open-drain
-    pub fn new(pin: impl Peripheral<P = impl Pin + 'd> + 'd, level: Level) -> Self {
-        into_ref!(pin);
-
+    pub fn new(pin: Peri<'d, impl Pin>, level: Level) -> Self {
         critical_section::with(|cs| {
             // Safety:
-            // We have a mutable reference to the pin through PeripheralRef
+            // We have a mutable reference to the pin through Peri
             unsafe { pin.set_low_voltage(cs, false) };
             unsafe { pin.set_pin_function(cs) };
 
@@ -256,7 +243,7 @@ impl<'d> OutputOpenDrain<'d, OutputOnly> {
         });
 
         OutputOpenDrain {
-            pin: pin.map_into(),
+            pin: pin.into(),
             _phantom: PhantomData,
         }
     }
@@ -264,12 +251,10 @@ impl<'d> OutputOpenDrain<'d, OutputOnly> {
 
 impl<'d> OutputOpenDrain<'d, InputCapable> {
     /// Configure a pin as open-drain
-    pub fn new(pin: impl Peripheral<P = impl InputPin + 'd> + 'd, level: Level) -> Self {
-        into_ref!(pin);
-
+    pub fn new(pin: Peri<'d, impl InputPin>, level: Level) -> Self {
         critical_section::with(|cs| {
             // Safety:
-            // We have a mutable reference to the pin through PeripheralRef
+            // We have a mutable reference to the pin through Peri
             unsafe { pin.set_low_voltage(cs, false) };
             unsafe { pin.set_pin_function(cs) };
 
@@ -282,7 +267,7 @@ impl<'d> OutputOpenDrain<'d, InputCapable> {
         });
 
         OutputOpenDrain {
-            pin: pin.map_into(),
+            pin: pin.into(),
             _phantom: PhantomData,
         }
     }
@@ -392,18 +377,16 @@ impl OutputOpenDrain<'_, InputCapable> {
 
 /// A pin configured as output
 pub struct Output<'d, T> {
-    pin: PeripheralRef<'d, AnyPin>,
+    pin: Peri<'d, AnyPin>,
     _phantom: PhantomData<T>,
 }
 
 impl<'d> Output<'d, OutputOnly> {
     /// Configure a pin as output
-    pub fn new(pin: impl Peripheral<P = impl Pin + 'd> + 'd, level: Level) -> Self {
-        into_ref!(pin);
-
+    pub fn new(pin: Peri<'d, impl Pin>, level: Level) -> Self {
         critical_section::with(|cs| {
             // Safety:
-            // We have a mutable reference to the pin through PeripheralRef
+            // We have a mutable reference to the pin through Peri
             unsafe { pin.set_low_voltage(cs, false) };
             unsafe { pin.set_pin_function(cs) };
 
@@ -416,7 +399,7 @@ impl<'d> Output<'d, OutputOnly> {
         });
 
         Output {
-            pin: pin.map_into(),
+            pin: pin.into(),
             _phantom: PhantomData,
         }
     }
@@ -424,12 +407,10 @@ impl<'d> Output<'d, OutputOnly> {
 
 impl<'d> Output<'d, InputCapable> {
     /// Configure a pin as output
-    pub fn new(pin: impl Peripheral<P = impl InputPin + 'd> + 'd, level: Level) -> Self {
-        into_ref!(pin);
-
+    pub fn new(pin: Peri<'d, impl InputPin>, level: Level) -> Self {
         critical_section::with(|cs| {
             // Safety:
-            // We have a mutable reference to the pin through PeripheralRef
+            // We have a mutable reference to the pin through Peri
             unsafe { pin.set_low_voltage(cs, false) };
             unsafe { pin.set_pin_function(cs) };
 
@@ -442,15 +423,13 @@ impl<'d> Output<'d, InputCapable> {
         });
 
         Output {
-            pin: pin.map_into(),
+            pin: pin.into(),
             _phantom: PhantomData,
         }
     }
 
     /// Configure a pin as output
-    pub fn new_lowvoltage(pin: impl Peripheral<P = impl LowVoltagePin + 'd> + 'd, level: Level) -> Self {
-        into_ref!(pin);
-
+    pub fn new_lowvoltage(pin: Peri<'d, impl LowVoltagePin>, level: Level) -> Self {
         critical_section::with(|cs| {
             let regs = pin.port();
 
@@ -461,14 +440,14 @@ impl<'d> Output<'d, InputCapable> {
             regs.px_dout().modify(|_, w| w.pin(pin.pin()).bit(level.into()));
 
             // Safety:
-            // We have a mutable reference to the pin through PeripheralRef
+            // We have a mutable reference to the pin through Peri
             // Everything is put in a safe state for low voltage above
             unsafe { pin.set_pin_function(cs) };
             unsafe { pin.set_low_voltage(cs, true) };
         });
 
         Self {
-            pin: pin.map_into(),
+            pin: pin.into(),
             _phantom: PhantomData,
         }
     }
