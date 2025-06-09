@@ -4,6 +4,7 @@
 
 pub mod cancellation;
 pub mod cdcg;
+pub mod espi;
 pub mod gpio;
 pub mod gpio_miwu;
 pub mod i2c;
@@ -30,6 +31,7 @@ pub struct Config {
 }
 
 embassy_hal_internal::peripherals!(
+    ESPI,
     PA02,
     PA03,
     PA04,
