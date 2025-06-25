@@ -2,8 +2,13 @@
 #![no_std]
 
 use defmt::*;
+use embassy_espi::driver::{
+    Driver, Event,
+    oob::OobChannel,
+    vwire::{self, VWireChannel},
+};
 use embassy_executor::Spawner;
-use embassy_npcx::espi::{AlertMode, Config, Espi, Event, InterruptHandler, IoMode, State};
+use embassy_npcx::espi::{AlertMode, Config, Espi, InterruptHandler, IoMode, OobConfig, OobPayload, VWireConfig};
 use embassy_npcx::{bind_interrupts, peripherals};
 use {defmt_rtt as _, panic_probe as _};
 
@@ -39,9 +44,10 @@ async fn main(_spawner: Spawner) {
 
     let mut config = Config::default();
 
-    config.peripheral_channel_support = true;
-    config.virtual_wire_support = true;
-    config.oob_support = true;
+    config.vwire_config = Some(VWireConfig {});
+    config.oob_config = Some(OobConfig {
+        max_payload_size: OobPayload::_64,
+    });
     config.alert_mode = AlertMode::Pin;
     config.io_mode = IoMode::Quad;
 
@@ -56,43 +62,42 @@ async fn main(_spawner: Spawner) {
         match result {
             Ok(event) => {
                 debug!("Got new event: {:#?}", event);
-
                 match event {
-                    Event::EspiReset(_) | Event::InBandResetCmdReceived => {
-                        espi.disable_peripheral_channel();
+                    Event::Reset => {
+                        debug!("Reset event (either In-band or eSPI_RST#)");
+                        // reset everything from the application side.
                     }
-                    Event::EspiConfigurationUpdated(cfg) => {
-                        if cfg.host_flash_channel == State::Enabled {
-                            espi.enable_flash_access_channel();
-                        } else {
-                            espi.disable_flash_access_channel();
-                        }
 
-                        if cfg.host_oob_channel == State::Enabled {
-                            espi.enable_oob_channel();
-                        } else {
-                            espi.disable_oob_channel();
-                        }
+                    Event::VWire => {
+                        // VWires changed, for now let's just get and
+                        // print all Readable types:
 
-                        if cfg.host_vwire_channel == State::Enabled {
-                            espi.enable_vwire_channel();
-                        } else {
-                            espi.disable_vwire_channel();
-                        }
+                        info!("SLP_S3# {:?}", espi.read_vwire(vwire::SlpS3).unwrap());
+                        info!("SLP_S4# {:?}", espi.read_vwire(vwire::SlpS4).unwrap());
+                        info!("SLP_S5# {:?}", espi.read_vwire(vwire::SlpS5).unwrap());
 
-                        if cfg.host_peripheral_channel == State::Enabled {
-                            espi.enable_peripheral_channel();
+                        info!("SUS_STAT# {:?}", espi.read_vwire(vwire::SusStat).unwrap());
+                        info!("PLTRST# {:?}", espi.read_vwire(vwire::PltRst).unwrap());
+                        info!("OOB_RST_WARN# {:?}", espi.read_vwire(vwire::OobRstWarn).unwrap());
+
+                        info!("HOST_RST_WARN# {:?}", espi.read_vwire(vwire::HostRstWarn).unwrap());
+                        info!("SMIOUT# {:?}", espi.read_vwire(vwire::SmiOut).unwrap());
+                        info!("NMIOUT# {:?}", espi.read_vwire(vwire::NmiOut).unwrap());
+                    }
+                    Event::Oob => {
+                        info!("OOB Received!");
+                        let mut buf = [0; 256];
+
+                        if let Ok(size) = espi.oob_receive(&mut buf).await {
+                            info!("Received {}bytes: {:02x}", size, buf[0..size]);
                         } else {
-                            espi.disable_peripheral_channel();
+                            error!("Failed receiving OOB");
                         }
                     }
                     _ => {}
                 }
             }
-
-            Err(err) => {
-                error!("Failed while listening: {:#?}", err);
-            }
+            _ => {}
         }
     }
 }

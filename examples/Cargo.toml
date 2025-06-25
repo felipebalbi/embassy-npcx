@@ -28,5 +28,7 @@ embedded-hal-async = "1.0"
 embedded-io-async = "0.6"
 embedded-hal-i2c = { git = "https://github.com/tweedegolf/embedded-hal-i2c.git", branch = "main" }
 
+embassy-espi = { path = "../../embassy-espi-rs/embassy-espi", features = [ "defmt" ] }
+
 [profile.release]
 debug = 2

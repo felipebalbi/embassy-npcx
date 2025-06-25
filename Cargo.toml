@@ -36,7 +36,8 @@ embassy-futures = { git = "https://github.com/embassy-rs/embassy" }
 embassy-time = { git = "https://github.com/embassy-rs/embassy", optional = true }
 embassy-time-driver = { git = "https://github.com/embassy-rs/embassy", optional = true }
 embassy-time-queue-utils = { git = "https://github.com/embassy-rs/embassy", optional = true }
-embassy-espi-driver = { git = "https://github.com/felipebalbi/embassy-espi-rs" }
+# embassy-espi-driver = { git = "https://github.com/felipebalbi/embassy-espi-rs" }
+embassy-espi-driver = { path = "../embassy-espi-rs/embassy-espi-driver" }
 
 cortex-m-rt = { version = ">=0.6.15,<0.8", optional = true }
 cortex-m = "0.7.7"

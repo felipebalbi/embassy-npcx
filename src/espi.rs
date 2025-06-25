@@ -4,11 +4,12 @@ use core::future::poll_fn;
 use core::marker::PhantomData;
 use core::task::Poll;
 
+use embassy_espi_driver::{Cycle, Driver, oob, vwire};
 use embassy_hal_internal::{Peri, PeripheralType};
 use embassy_sync::waitqueue::AtomicWaker;
 
 use crate::interrupt::typelevel::Interrupt;
-use crate::pac::espi::espierr::EspierrSpec;
+use crate::pac::espi::espiie::EspiieSpec;
 use crate::pac::espi::espists::EspistsSpec;
 use crate::pac::generic::Writable;
 
@@ -197,18 +198,76 @@ pub struct Config {
     /// Valid values are from 1 to 16.
     pub wait_state: u8,
 
-    /// Enable Peripheral Channel support.
-    pub peripheral_channel_support: bool,
+    /// Peripheral channel configuration
+    pub peripheral_config: Option<PeripheralConfig>,
 
-    /// Enable Virtual Wire Channel support.
-    pub virtual_wire_support: bool,
+    /// OOB channel configuration
+    pub oob_config: Option<OobConfig>,
 
-    /// Enable OOB Channel support.
-    pub oob_support: bool,
+    /// VWire channel configuration
+    pub vwire_config: Option<VWireConfig>,
 
-    /// Flash Access Channel support.
-    pub flash_access_support: bool,
+    /// Flash access channel configuration
+    pub flash_config: Option<FlashConfig>,
 }
+
+/// Peripheral channel configuration.
+#[derive(Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct PeripheralConfig {}
+
+/// OOB channel configuration.
+#[derive(Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct OobConfig {
+    /// Maximum OOB payload size.
+    pub max_payload_size: OobPayload,
+}
+
+/// OOB payload size
+#[derive(Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum OobPayload {
+    /// 64 bytes,
+    _64,
+    /// 128 bytes,
+    _128,
+    /// 256 bytes,
+    _256,
+}
+
+impl TryFrom<u8> for OobPayload {
+    type Error = Error;
+
+    fn try_from(value: u8) -> Result<OobPayload, Error> {
+        match value {
+            0 => Ok(OobPayload::_64),
+            1 => Ok(OobPayload::_128),
+            3 => Ok(OobPayload::_256),
+            _ => Err(Error::Other),
+        }
+    }
+}
+
+impl From<OobPayload> for u8 {
+    fn from(value: OobPayload) -> u8 {
+        match value {
+            OobPayload::_64 => 0,
+            OobPayload::_128 => 1,
+            OobPayload::_256 => 3,
+        }
+    }
+}
+
+/// VWire channel configuration.
+#[derive(Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct VWireConfig {}
+
+/// Flash access channel configuration.
+#[derive(Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct FlashConfig {}
 
 impl Default for Config {
     fn default() -> Self {
@@ -217,10 +276,10 @@ impl Default for Config {
             io_mode: IoMode::Single,
             frequency: Frequency::_20MHz,
             wait_state: 1,
-            peripheral_channel_support: false,
-            virtual_wire_support: false,
-            oob_support: false,
-            flash_access_support: false,
+            peripheral_config: None,
+            oob_config: None,
+            vwire_config: None,
+            flash_config: None,
         }
     }
 }
@@ -294,77 +353,74 @@ pub enum Error {
     Other,
 }
 
-/// eSPI events.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub enum Event {
-    /// Bus Master Burst Mode Write Transfer Done.
-    BusMasterBurstModeWriteTransferDone,
+// /// eSPI events.
+// #[non_exhaustive]
+// #[derive(Clone, Copy, Debug)]
+// #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+// pub enum Event {
+//     /// Bus Master Burst Mode Write Transfer Done.
+//     BusMasterBurstModeWriteTransferDone,
 
-    /// Bus Master Burst Mode Read Transfer Done.
-    BusMasterBurstModeReadTransferDone,
+//     /// Bus Master Burst Mode Read Transfer Done.
+//     BusMasterBurstModeReadTransferDone,
 
-    /// Automatic Read Disable Status.
-    AutomaticReadDisableStatus,
+//     /// Automatic Read Disable Status.
+//     AutomaticReadDisableStatus,
 
-    /// Flash Automatic Read Queue Empty.
-    FlashAutomaticReadQueueEmpty,
+//     /// Flash Automatic Read Queue Empty.
+//     FlashAutomaticReadQueueEmpty,
 
-    /// Flash Automatic Read Request Pending.
-    FlashAutomaticReadRequestPending,
+//     /// Flash Automatic Read Request Pending.
+//     FlashAutomaticReadRequestPending,
 
-    /// Flash Automatic Read Request Start.
-    FlashAutomaticReadRequestStart,
+//     /// Flash Automatic Read Request Start.
+//     FlashAutomaticReadRequestStart,
 
-    /// Peripheral Message Data Received.
-    PeripheralMessageDataReceived,
+//     /// Peripheral Message Data Received.
+//     PeripheralMessageDataReceived,
 
-    /// Peripheral Bus Master Data Received.
-    PeripheralBusMasterDataReceived,
+//     /// Peripheral Bus Master Data Received.
+//     PeripheralBusMasterDataReceived,
 
-    /// Peripheral Bus Master Data Transmitted.
-    PeripheralBusMasterDataTransmitted,
+//     /// Peripheral Bus Master Data Transmitted.
+//     PeripheralBusMasterDataTransmitted,
 
-    /// Flash Non-posted Request Sent.
-    FlashNonPostedRequestSent,
+//     /// Flash Non-posted Request Sent.
+//     FlashNonPostedRequestSent,
 
-    /// Virtual Wire Updated Wake-up.
-    VirtualWireUpdatedWakeUp,
+//     /// Virtual Wire Updated Wake-up.
+//     VirtualWireUpdatedWakeUp,
 
-    /// Automatic Mode Transfer Done.
-    AutomaticModeTransferDone,
+//     /// Automatic Mode Transfer Done.
+//     AutomaticModeTransferDone,
 
-    /// Platform Reset.
-    PlatformReset,
+//     /// Platform Reset.
+//     PlatformReset,
 
-    /// eSPI Reset
-    EspiReset(bool),
+//     /// eSPI Reset
+//     EspiReset(bool),
 
-    /// Virtual Wire Updated.
-    VirtualWireUpdated,
+//     /// Virtual Wire Updated.
+//     VirtualWireUpdated,
 
-    /// Peripheral Channel Transaction Deferred.
-    PeripheralChannelTransactionDeferred,
+//     /// Peripheral Channel Transaction Deferred.
+//     PeripheralChannelTransactionDeferred,
 
-    /// Peripheral Channel Access Detected.
-    PeripheralChannelAccessDetected,
+//     /// Peripheral Channel Access Detected.
+//     PeripheralChannelAccessDetected,
 
-    /// Flash Non-automatic Completion Sent.
-    FlashNonAutomaticCompletionSent,
+//     /// Flash Non-automatic Completion Sent.
+//     FlashNonAutomaticCompletionSent,
 
-    /// Flash Data Received.
-    FlashDataReceived,
+//     /// Flash Data Received.
+//     FlashDataReceived,
 
-    /// OOB Data Received.
-    OobDataReceived,
+//     /// OOB Data Received.
+//     OobDataReceived,
 
-    /// eSPI Configuration Updated.
-    EspiConfigurationUpdated(Configuration),
-
-    /// In-band Reset Command Received.
-    InBandResetCmdReceived,
-}
+//     /// In-band Reset Command Received.
+//     InBandResetCmdReceived,
+// }
 
 /// Host side eSPI configuration data
 #[derive(Clone, Copy, Debug)]
@@ -431,20 +487,33 @@ impl<'p, T: Instance> Espi<'p, T> {
 
             T::regs().espicfg().modify(|_, w| unsafe {
                 w.flashchn_supp()
-                    .variant(config.flash_access_support)
+                    .variant(config.flash_config.is_some())
                     .oobchn_supp()
-                    .variant(config.oob_support)
+                    .variant(config.oob_config.is_some())
                     .vwchn_supp()
-                    .variant(config.virtual_wire_support)
+                    .variant(config.vwire_config.is_some())
                     .pcchn_supp()
-                    .variant(config.peripheral_channel_support)
+                    .variant(config.peripheral_config.is_some())
                     .maxfreq()
                     .bits(config.frequency.into())
                     .iomode()
                     .bits(config.io_mode.into())
             });
 
-            if config.virtual_wire_support {
+            T::regs().oobctl().modify(|_, w| unsafe {
+                w.oobplsize().bits(
+                    config
+                        .oob_config
+                        .unwrap_or(OobConfig {
+                            max_payload_size: OobPayload::_64,
+                        })
+                        .max_payload_size
+                        .into(),
+                )
+            });
+
+            // Let user tell us which vwire indices to enable.
+            if config.vwire_config.is_some() {
                 // configure inputs
                 for reg in T::regs().vwevms_iter() {
                     reg.modify(|_, w| w.ie().set_bit().we().set_bit().index_en().set_bit());
@@ -480,235 +549,242 @@ impl<'p, T: Instance> Espi<'p, T> {
         }
     }
 
-    /// Listen for a new event.
-    pub async fn listen(&mut self) -> Result<Event, Error> {
-        self.wait_for(
-            |me| {
-                let status = T::regs().espists().read();
+    // async fn listen(&mut self) -> Result<Event, Error> {
+    //     self.wait_for(
+    //         |me| {
+    //             let status = T::regs().espists().read();
 
-                // Clear all events
-                T::regs()
-                    .espists()
-                    .write(|w| unsafe { w.bits(EspistsSpec::ONE_TO_MODIFY_FIELDS_BITMAP) });
+    //             // Clear all events
+    //             T::regs()
+    //                 .espists()
+    //                 .write(|w| unsafe { w.bits(EspistsSpec::ONE_TO_MODIFY_FIELDS_BITMAP) });
 
-                if status.ibrst().bit_is_set() {
-                    me.pltrst_received = false;
-                    Poll::Ready(Ok(Event::InBandResetCmdReceived))
-                } else if status.cfgupd().bit_is_set() {
-                    let cfg = T::regs().espicfg().read();
+    //             if status.ibrst().bit_is_set() {
+    //                 me.pltrst_received = false;
+    //                 Poll::Ready(Ok(Event::InBandResetCmdReceived))
+    //             } else if status.cfgupd().bit_is_set() {
+    //                 let cfg = T::regs().espicfg().read();
 
-                    let configuration = Configuration {
-                        crc_check: cfg.crc_chk_en().bit().into(),
-                        alert_mode: cfg.alertmode().bit().into(),
-                        io_mode: cfg.iomodesel().bits().try_into()?,
-                        frequency: cfg.opfreq().bits().try_into()?,
-                        flash_access_mode: cfg.flchanmode().bit().into(),
-                        host_flash_channel: cfg.hflashchanen().bit().into(),
-                        host_oob_channel: cfg.hoobchanen().bit().into(),
-                        host_vwire_channel: cfg.hvwchanen().bit().into(),
-                        host_peripheral_channel: cfg.hpchanen().bit().into(),
-                    };
+    //                 if cfg.hflashchanen().bit_is_set() {
+    //                     me.enable_flash_access_channel();
+    //                 } else {
+    //                     me.disable_flash_access_channel();
+    //                 }
 
-                    Poll::Ready(Ok(Event::EspiConfigurationUpdated(configuration)))
-                } else if status.berr().bit_is_set() {
-                    // Clear all errors
-                    let err = T::regs().espierr().read();
-                    T::regs()
-                        .espierr()
-                        .write(|w| unsafe { w.bits(EspierrSpec::ONE_TO_MODIFY_FIELDS_BITMAP) });
+    //                 if cfg.hoobchanen().bit_is_set() {
+    //                     me.enable_oob_channel();
+    //                 } else {
+    //                     me.disable_oob_channel();
+    //                 }
 
-                    if err.unflash().bit_is_set() {
-                        Poll::Ready(Err(Error::EspiBusError(BusError::UnsuccessfulFlashCompletion)))
-                    } else if err.unpbm().bit_is_set() {
-                        Poll::Ready(Err(Error::EspiBusError(BusError::UnsuccessfulBusMasterCompletion)))
-                    } else if err.vwerr().bit_is_set() {
-                        Poll::Ready(Err(Error::EspiBusError(BusError::VWChannelAccessError)))
-                    } else if err.extracyc().bit_is_set() {
-                        Poll::Ready(Err(Error::EspiBusError(BusError::ExtraCycles)))
-                    } else if err.uncmd().bit_is_set() {
-                        Poll::Ready(Err(Error::EspiBusError(BusError::UnsupportedCmd)))
-                    } else if err.pcbadaln().bit_is_set() {
-                        Poll::Ready(Err(Error::EspiBusError(BusError::PostedBadAlignment)))
-                    } else if err.npbadaln().bit_is_set() {
-                        Poll::Ready(Err(Error::EspiBusError(BusError::NonPostedBadAlignment)))
-                    } else if err.badsize().bit_is_set() {
-                        Poll::Ready(Err(Error::EspiBusError(BusError::BadSize)))
-                    } else if err.proterr().bit_is_set() {
-                        Poll::Ready(Err(Error::EspiBusError(BusError::ProtocolError)))
-                    } else if err.abcomp().bit_is_set() {
-                        Poll::Ready(Err(Error::EspiBusError(BusError::AbnormalCompletion)))
-                    } else if err.crcerr().bit_is_set() {
-                        Poll::Ready(Err(Error::EspiBusError(BusError::CRCError)))
-                    } else if err.invcyc().bit_is_set() {
-                        Poll::Ready(Err(Error::EspiBusError(BusError::InvalidCycleType)))
-                    } else if err.invcmd().bit_is_set() {
-                        Poll::Ready(Err(Error::EspiBusError(BusError::InvalidCommandType)))
-                    } else {
-                        Poll::Ready(Err(Error::Other))
-                    }
-                } else if status.oobrx().bit_is_set() {
-                    Poll::Ready(Ok(Event::OobDataReceived))
-                } else if status.flashrx().bit_is_set() {
-                    Poll::Ready(Ok(Event::FlashDataReceived))
-                } else if status.flnacs().bit_is_set() {
-                    Poll::Ready(Ok(Event::FlashNonAutomaticCompletionSent))
-                } else if status.peracc().bit_is_set() {
-                    Poll::Ready(Ok(Event::PeripheralChannelAccessDetected))
-                } else if status.dfrd().bit_is_set() {
-                    Poll::Ready(Ok(Event::PeripheralChannelTransactionDeferred))
-                } else if status.pltrst().bit_is_set() {
-                    me.pltrst_received = true;
-                    Poll::Ready(Ok(Event::PlatformReset))
-                } else if status.vwupd().bit_is_set() {
-                    let supported = T::regs().espicfg().read().pcchn_supp().bit();
-                    let index3 = T::regs().vwevms(1).read().bits();
-                    let pltrst = index3 & (1 << 1) == 0;
-                    let pltrst_valid = index3 & (1 << 5) != 0;
+    //                 if cfg.hvwchanen().bit_is_set() {
+    //                     me.enable_vwire_channel();
+    //                 } else {
+    //                     me.disable_vwire_channel();
+    //                 }
 
-                    // Peripheral channel is somewhat quirky. We can only enable
-                    // it after PLTRST# asserted.
-                    if me.pltrst_received && pltrst && pltrst_valid && supported {
-                        critical_section::with(|_| T::regs().espicfg().modify(|_, w| w.pchanen().set_bit()));
-                    }
+    //                 Poll::Pending
+    //             } else if status.berr().bit_is_set() {
+    //                 // Clear all errors
+    //                 let err = T::regs().espierr().read();
+    //                 T::regs()
+    //                     .espierr()
+    //                     .write(|w| unsafe { w.bits(EspierrSpec::ONE_TO_MODIFY_FIELDS_BITMAP) });
 
-                    Poll::Ready(Ok(Event::VirtualWireUpdated))
-                } else if status.espirst().bit_is_set() {
-                    let level = T::regs().espists().read().espirst_lvl().bit();
-                    me.pltrst_received = false;
-                    Poll::Ready(Ok(Event::EspiReset(level)))
-                } else if status.amerr().bit_is_set() {
-                    Poll::Ready(Err(Error::AutomaticModeTransferError))
-                } else if status.amdone().bit_is_set() {
-                    Poll::Ready(Ok(Event::AutomaticModeTransferDone))
-                } else if status.flnprqs().bit_is_set() {
-                    Poll::Ready(Ok(Event::FlashNonPostedRequestSent))
-                } else if status.bmtxdone().bit_is_set() {
-                    Poll::Ready(Ok(Event::PeripheralBusMasterDataTransmitted))
-                } else if status.pbmrx().bit_is_set() {
-                    Poll::Ready(Ok(Event::PeripheralBusMasterDataReceived))
-                } else if status.pmsgrx().bit_is_set() {
-                    Poll::Ready(Ok(Event::PeripheralMessageDataReceived))
-                } else if status.bmbursterr().bit_is_set() {
-                    Poll::Ready(Err(Error::BusMasterBurstModeReadTransferError))
-                } else if status.bmburstdone().bit_is_set() {
-                    Poll::Ready(Ok(Event::BusMasterBurstModeReadTransferDone))
-                } else if status.flprterr().bit_is_set() {
-                    Poll::Ready(Err(Error::FlashProtectionError))
-                } else if status.flautordstr().bit_is_set() {
-                    Poll::Ready(Ok(Event::FlashAutomaticReadRequestStart))
-                } else if status.flautordpnd().bit_is_set() {
-                    Poll::Ready(Ok(Event::FlashAutomaticReadRequestPending))
-                } else if status.flautordqemp().bit_is_set() {
-                    Poll::Ready(Ok(Event::FlashAutomaticReadQueueEmpty))
-                } else if status.auto_rd_dis_sts().bit_is_set() {
-                    Poll::Ready(Ok(Event::AutomaticReadDisableStatus))
-                } else if status.bmwbursterr().bit_is_set() {
-                    Poll::Ready(Err(Error::BusMasterBurstModeWriteTransferError))
-                } else if status.bmwburstdone().bit_is_set() {
-                    Poll::Ready(Ok(Event::BusMasterBurstModeWriteTransferDone))
-                } else {
-                    Poll::Pending
-                }
-            },
-            |_| {
-                // Enable all interrupts
-                T::regs().espiie().write(|w| {
-                    w.bmwburstdoneie()
-                        .set_bit()
-                        .bmwbursterrie()
-                        .set_bit()
-                        .flautorddisie()
-                        .set_bit()
-                        .flautordqempie()
-                        .set_bit()
-                        .flautordpndie()
-                        .set_bit()
-                        .flautordstrie()
-                        .set_bit()
-                        .flprterrie()
-                        .set_bit()
-                        .bmburstdoneie()
-                        .set_bit()
-                        .bmbursterrie()
-                        .set_bit()
-                        .pmsgrxie()
-                        .set_bit()
-                        .pbmrxie()
-                        .set_bit()
-                        .bmtxdoneie()
-                        .set_bit()
-                        .flnprqsie()
-                        .set_bit()
-                        .amdoneie()
-                        .set_bit()
-                        .amerrie()
-                        .set_bit()
-                        .pltrstie()
-                        .set_bit()
-                        .espirstie()
-                        .set_bit()
-                        .vwupdie()
-                        .set_bit()
-                        .dfrdie()
-                        .set_bit()
-                        .peraccie()
-                        .set_bit()
-                        .flnacsie()
-                        .set_bit()
-                        .flashrxie()
-                        .set_bit()
-                        .oobrxie()
-                        .set_bit()
-                        .berrie()
-                        .set_bit()
-                        .cfgupdie()
-                        .set_bit()
-                        .ibrstie()
-                        .set_bit()
-                });
-            },
-        )
-        .await
-    }
+    //                 if err.unflash().bit_is_set() {
+    //                     Poll::Ready(Err(Error::EspiBusError(BusError::UnsuccessfulFlashCompletion)))
+    //                 } else if err.unpbm().bit_is_set() {
+    //                     Poll::Ready(Err(Error::EspiBusError(BusError::UnsuccessfulBusMasterCompletion)))
+    //                 } else if err.vwerr().bit_is_set() {
+    //                     Poll::Ready(Err(Error::EspiBusError(BusError::VWChannelAccessError)))
+    //                 } else if err.extracyc().bit_is_set() {
+    //                     Poll::Ready(Err(Error::EspiBusError(BusError::ExtraCycles)))
+    //                 } else if err.uncmd().bit_is_set() {
+    //                     Poll::Ready(Err(Error::EspiBusError(BusError::UnsupportedCmd)))
+    //                 } else if err.pcbadaln().bit_is_set() {
+    //                     Poll::Ready(Err(Error::EspiBusError(BusError::PostedBadAlignment)))
+    //                 } else if err.npbadaln().bit_is_set() {
+    //                     Poll::Ready(Err(Error::EspiBusError(BusError::NonPostedBadAlignment)))
+    //                 } else if err.badsize().bit_is_set() {
+    //                     Poll::Ready(Err(Error::EspiBusError(BusError::BadSize)))
+    //                 } else if err.proterr().bit_is_set() {
+    //                     Poll::Ready(Err(Error::EspiBusError(BusError::ProtocolError)))
+    //                 } else if err.abcomp().bit_is_set() {
+    //                     Poll::Ready(Err(Error::EspiBusError(BusError::AbnormalCompletion)))
+    //                 } else if err.crcerr().bit_is_set() {
+    //                     Poll::Ready(Err(Error::EspiBusError(BusError::CRCError)))
+    //                 } else if err.invcyc().bit_is_set() {
+    //                     Poll::Ready(Err(Error::EspiBusError(BusError::InvalidCycleType)))
+    //                 } else if err.invcmd().bit_is_set() {
+    //                     Poll::Ready(Err(Error::EspiBusError(BusError::InvalidCommandType)))
+    //                 } else {
+    //                     Poll::Ready(Err(Error::Other))
+    //                 }
+    //             } else if status.oobrx().bit_is_set() {
+    //                 Poll::Ready(Ok(Event::OobDataReceived))
+    //             } else if status.flashrx().bit_is_set() {
+    //                 Poll::Ready(Ok(Event::FlashDataReceived))
+    //             } else if status.flnacs().bit_is_set() {
+    //                 Poll::Ready(Ok(Event::FlashNonAutomaticCompletionSent))
+    //             } else if status.peracc().bit_is_set() {
+    //                 Poll::Ready(Ok(Event::PeripheralChannelAccessDetected))
+    //             } else if status.dfrd().bit_is_set() {
+    //                 Poll::Ready(Ok(Event::PeripheralChannelTransactionDeferred))
+    //             } else if status.pltrst().bit_is_set() {
+    //                 me.pltrst_received = true;
+    //                 Poll::Ready(Ok(Event::PlatformReset))
+    //             } else if status.vwupd().bit_is_set() {
+    //                 let supported = T::regs().espicfg().read().pcchn_supp().bit();
+    //                 let index3 = T::regs().vwevms(1).read().bits();
+    //                 let pltrst = index3 & (1 << 1) == 0;
+    //                 let pltrst_valid = index3 & (1 << 5) != 0;
+
+    //                 // Peripheral channel is somewhat quirky. We can only enable
+    //                 // it after PLTRST# asserted.
+    //                 if me.pltrst_received && pltrst && pltrst_valid && supported {
+    //                     me.enable_peripheral_channel();
+    //                 } else {
+    //                     me.disable_peripheral_channel();
+    //                 }
+
+    //                 Poll::Ready(Ok(Event::VirtualWireUpdated))
+    //             } else if status.espirst().bit_is_set() {
+    //                 let level = T::regs().espists().read().espirst_lvl().bit();
+    //                 me.pltrst_received = false;
+    //                 Poll::Ready(Ok(Event::EspiReset(level)))
+    //             } else if status.amerr().bit_is_set() {
+    //                 Poll::Ready(Err(Error::AutomaticModeTransferError))
+    //             } else if status.amdone().bit_is_set() {
+    //                 Poll::Ready(Ok(Event::AutomaticModeTransferDone))
+    //             } else if status.flnprqs().bit_is_set() {
+    //                 Poll::Ready(Ok(Event::FlashNonPostedRequestSent))
+    //             } else if status.bmtxdone().bit_is_set() {
+    //                 Poll::Ready(Ok(Event::PeripheralBusMasterDataTransmitted))
+    //             } else if status.pbmrx().bit_is_set() {
+    //                 Poll::Ready(Ok(Event::PeripheralBusMasterDataReceived))
+    //             } else if status.pmsgrx().bit_is_set() {
+    //                 Poll::Ready(Ok(Event::PeripheralMessageDataReceived))
+    //             } else if status.bmbursterr().bit_is_set() {
+    //                 Poll::Ready(Err(Error::BusMasterBurstModeReadTransferError))
+    //             } else if status.bmburstdone().bit_is_set() {
+    //                 Poll::Ready(Ok(Event::BusMasterBurstModeReadTransferDone))
+    //             } else if status.flprterr().bit_is_set() {
+    //                 Poll::Ready(Err(Error::FlashProtectionError))
+    //             } else if status.flautordstr().bit_is_set() {
+    //                 Poll::Ready(Ok(Event::FlashAutomaticReadRequestStart))
+    //             } else if status.flautordpnd().bit_is_set() {
+    //                 Poll::Ready(Ok(Event::FlashAutomaticReadRequestPending))
+    //             } else if status.flautordqemp().bit_is_set() {
+    //                 Poll::Ready(Ok(Event::FlashAutomaticReadQueueEmpty))
+    //             } else if status.auto_rd_dis_sts().bit_is_set() {
+    //                 Poll::Ready(Ok(Event::AutomaticReadDisableStatus))
+    //             } else if status.bmwbursterr().bit_is_set() {
+    //                 Poll::Ready(Err(Error::BusMasterBurstModeWriteTransferError))
+    //             } else if status.bmwburstdone().bit_is_set() {
+    //                 Poll::Ready(Ok(Event::BusMasterBurstModeWriteTransferDone))
+    //             } else {
+    //                 Poll::Pending
+    //             }
+    //         },
+    //         |_| {
+    //             // Enable all interrupts
+    //             T::regs().espiie().write(|w| {
+    //                 w.bmwburstdoneie()
+    //                     .set_bit()
+    //                     .bmwbursterrie()
+    //                     .set_bit()
+    //                     .flautorddisie()
+    //                     .set_bit()
+    //                     .flautordqempie()
+    //                     .set_bit()
+    //                     .flautordpndie()
+    //                     .set_bit()
+    //                     .flautordstrie()
+    //                     .set_bit()
+    //                     .flprterrie()
+    //                     .set_bit()
+    //                     .bmburstdoneie()
+    //                     .set_bit()
+    //                     .bmbursterrie()
+    //                     .set_bit()
+    //                     .pmsgrxie()
+    //                     .set_bit()
+    //                     .pbmrxie()
+    //                     .set_bit()
+    //                     .bmtxdoneie()
+    //                     .set_bit()
+    //                     .flnprqsie()
+    //                     .set_bit()
+    //                     .amdoneie()
+    //                     .set_bit()
+    //                     .amerrie()
+    //                     .set_bit()
+    //                     .pltrstie()
+    //                     .set_bit()
+    //                     .espirstie()
+    //                     .set_bit()
+    //                     .vwupdie()
+    //                     .set_bit()
+    //                     .dfrdie()
+    //                     .set_bit()
+    //                     .peraccie()
+    //                     .set_bit()
+    //                     .flnacsie()
+    //                     .set_bit()
+    //                     .flashrxie()
+    //                     .set_bit()
+    //                     .oobrxie()
+    //                     .set_bit()
+    //                     .berrie()
+    //                     .set_bit()
+    //                     .cfgupdie()
+    //                     .set_bit()
+    //                     .ibrstie()
+    //                     .set_bit()
+    //             });
+    //         },
+    //     )
+    //     .await
+    // }
 
     /// Enable flash access channel
-    pub fn enable_flash_access_channel(&mut self) {
+    fn enable_flash_access_channel(&mut self) {
         critical_section::with(|_| T::regs().espicfg().modify(|_, w| w.flashchanen().set_bit()));
     }
 
     /// Disable flash access channel
-    pub fn disable_flash_access_channel(&mut self) {
+    fn disable_flash_access_channel(&mut self) {
         critical_section::with(|_| T::regs().espicfg().modify(|_, w| w.flashchanen().clear_bit()));
     }
 
     /// Enable OOB channel
-    pub fn enable_oob_channel(&mut self) {
+    fn enable_oob_channel(&mut self) {
         critical_section::with(|_| T::regs().espicfg().modify(|_, w| w.oobchanen().set_bit()));
     }
 
     /// Disable OOB channel
-    pub fn disable_oob_channel(&mut self) {
+    fn disable_oob_channel(&mut self) {
         critical_section::with(|_| T::regs().espicfg().modify(|_, w| w.oobchanen().clear_bit()));
     }
 
     /// Enable VWire channel
-    pub fn enable_vwire_channel(&mut self) {
+    fn enable_vwire_channel(&mut self) {
         critical_section::with(|_| T::regs().espicfg().modify(|_, w| w.vwchanen().set_bit()));
     }
 
     /// Disable VWire channel
-    pub fn disable_vwire_channel(&mut self) {
+    fn disable_vwire_channel(&mut self) {
         critical_section::with(|_| T::regs().espicfg().modify(|_, w| w.vwchanen().clear_bit()));
     }
 
     /// Enable peripheral channel
-    pub fn enable_peripheral_channel(&mut self) {
-        // critical_section::with(|_| T::regs().espicfg().modify(|_, w| w.pchanen().set_bit()));
+    fn enable_peripheral_channel(&mut self) {
+        critical_section::with(|_| T::regs().espicfg().modify(|_, w| w.pchanen().set_bit()));
     }
 
     /// Disable peripheral channel
-    pub fn disable_peripheral_channel(&mut self) {
-        // critical_section::with(|_| T::regs().espicfg().modify(|_, w| w.pchanen().clear_bit()));
+    fn disable_peripheral_channel(&mut self) {
+        critical_section::with(|_| T::regs().espicfg().modify(|_, w| w.pchanen().clear_bit()));
     }
 
     /// Calls `f` to check if we are ready or not.
@@ -734,6 +810,232 @@ impl<'p, T: Instance> Espi<'p, T> {
     }
 }
 
+impl<'p, T: Instance> Driver<'p> for Espi<'p, T> {
+    async fn listen(&mut self) -> Result<embassy_espi_driver::Event, embassy_espi_driver::EspiError> {
+        self.wait_for(
+            |me| {
+                let status = T::regs().espists().read();
+
+                // Clear all events
+                critical_section::with(|_| {
+                    T::regs()
+                        .espists()
+                        .modify(|_, w| unsafe { w.bits(EspistsSpec::ONE_TO_MODIFY_FIELDS_BITMAP) })
+                });
+
+                if status.ibrst().bit_is_set() {
+                    me.pltrst_received = false;
+                    Poll::Ready(Ok(embassy_espi_driver::Event::Reset))
+                } else if status.cfgupd().bit_is_set() {
+                    let cfg = T::regs().espicfg().read();
+
+                    if cfg.hflashchanen().bit_is_set() {
+                        me.enable_flash_access_channel();
+                    } else {
+                        me.disable_flash_access_channel();
+                    }
+
+                    if cfg.hoobchanen().bit_is_set() {
+                        me.enable_oob_channel();
+                    } else {
+                        me.disable_oob_channel();
+                    }
+
+                    if cfg.hvwchanen().bit_is_set() {
+                        me.enable_vwire_channel();
+                    } else {
+                        me.disable_vwire_channel();
+                    }
+
+                    Poll::Pending
+                } else if status.vwupd().bit_is_set() {
+                    let supported = T::regs().espicfg().read().pcchn_supp().bit();
+                    let index3 = T::regs().vwevms(1).read().bits();
+                    let pltrst = index3 & (1 << 1) == 0;
+                    let pltrst_valid = index3 & (1 << 5) != 0;
+
+                    // Peripheral channel is somewhat quirky. We can only enable
+                    // it after PLTRST# asserted.
+                    if me.pltrst_received && pltrst && pltrst_valid && supported {
+                        me.enable_peripheral_channel();
+                    } else {
+                        me.disable_peripheral_channel();
+                    }
+
+                    Poll::Ready(Ok(embassy_espi_driver::Event::VWire))
+                } else if status.espirst().bit_is_set() {
+                    me.pltrst_received = false;
+                    Poll::Ready(Ok(embassy_espi_driver::Event::Reset))
+                } else if status.oobrx().bit_is_set() {
+                    Poll::Ready(Ok(embassy_espi_driver::Event::Oob))
+                } else {
+                    Poll::Pending
+                }
+            },
+            |_| {
+                // Enable all interrupts
+                T::regs().espiie().write(|w| {
+                    w.pltrstie()
+                        .set_bit()
+                        .espirstie()
+                        .set_bit()
+                        .vwupdie()
+                        .set_bit()
+                        .dfrdie()
+                        .set_bit()
+                        .peraccie()
+                        .set_bit()
+                        .flnacsie()
+                        .set_bit()
+                        .oobrxie()
+                        .set_bit()
+                        .berrie()
+                        .set_bit()
+                        .cfgupdie()
+                        .set_bit()
+                        .ibrstie()
+                        .set_bit()
+                });
+            },
+        )
+        .await
+    }
+}
+
+impl<'p, T: Instance> vwire::VWireChannel for Espi<'p, T> {
+    fn read_vwire<VWIRE: vwire::Readable>(
+        &mut self,
+        vwire: VWIRE,
+    ) -> Result<(bool, bool), embassy_espi_driver::EspiError> {
+        let index = match vwire.index() {
+            2 => 0,
+            3 => 1,
+            7 => 2,
+            _ => return Err(embassy_espi_driver::EspiError::UnsupportedVWire),
+        };
+
+        let bit = T::regs().vwevms(index).read().wire3_0().bits() & (1 << vwire.bit()) != 0;
+        let valid = T::regs().vwevms(index).read().wire3_0valid().bits() & (1 << vwire.bit()) != 0;
+
+        Ok((bit, valid))
+    }
+
+    fn write_vwire<VWIRE: vwire::Writeable>(
+        &mut self,
+        vwire: VWIRE,
+        value: bool,
+    ) -> Result<(), embassy_espi_driver::EspiError> {
+        let bit = vwire.bit();
+        let index = match vwire.index() {
+            4 => 0,
+            5 => 1,
+            6 => 2,
+            _ => return Err(embassy_espi_driver::EspiError::UnsupportedVWire),
+        };
+
+        T::regs().vwevsm(index).modify(|r, w| {
+            let mut wires = r.wire3_0().bits();
+            let mut valid = r.wire3_0valid().bits();
+
+            if value {
+                wires |= 1 << bit;
+            } else {
+                wires &= !(1 << bit);
+            }
+
+            valid |= 1 << bit;
+
+            unsafe { w.wire3_0().bits(wires).wire3_0valid().bits(valid) }
+        });
+
+        Ok(())
+    }
+}
+
+impl<'p, T: Instance> oob::OobChannel for Espi<'p, T> {
+    async fn oob_receive(&mut self, buf: &mut [u8]) -> Result<usize, embassy_espi_driver::EspiError> {
+        // Get the header
+        let header = T::regs().oobrxbuf(0).read().bits();
+        // Extract transfer size.
+        //
+        // REVISIT: should define a structure for this. Probably as part of embassy_espi_driver.
+        let size = (header & 0xff00_0000) >> 24 | (header & 0x000f_0000) >> 8;
+
+        let max_payload_size = match T::regs().oobctl().read().oobplsize().bits().try_into().unwrap() {
+            OobPayload::_64 => 64,
+            OobPayload::_128 => 128,
+            OobPayload::_256 => 256,
+        };
+
+        if buf.len() < size as usize || buf.len() > max_payload_size {
+            Err(embassy_espi_driver::EspiError::DataSize(size))
+        } else {
+            let aligned = (size / 4) as usize;
+            let remaining = (size % 4) as usize;
+
+            for (i, oobrx) in T::regs().oobrxbuf_iter().skip(1).take(aligned).enumerate() {
+                let data = oobrx.read().bits().to_ne_bytes();
+                buf[(i * 4)..(i * 4 + 4)].copy_from_slice(&data);
+            }
+
+            if remaining > 0 {
+                let data = T::regs().oobrxbuf(aligned + 1).read().bits().to_ne_bytes();
+
+                for i in 0..remaining {
+                    buf[aligned * 4 + i] = data[i];
+                }
+            }
+
+            critical_section::with(|_| T::regs().oobctl().modify(|_, w| w.oob_free().set_bit()));
+
+            Ok(size as usize)
+        }
+    }
+
+    async fn oob_send(&mut self, buf: &[u8]) -> Result<usize, embassy_espi_driver::EspiError> {
+        let max_payload_size = match T::regs().oobctl().read().oobplsize().bits().try_into().unwrap() {
+            OobPayload::_64 => 64,
+            OobPayload::_128 => 128,
+            OobPayload::_256 => 256,
+        };
+
+        if T::regs().oobctl().read().oob_avail().bit_is_set() {
+            Err(embassy_espi_driver::EspiError::BufferFull)
+        } else if buf.len() > max_payload_size {
+            Err(embassy_espi_driver::EspiError::DataSize(buf.len() as u32))
+        } else {
+            // # Safety: slice is valid and we can reinterpret &[u8] as &[u32].
+            let (_, aligned, suffix) = unsafe { buf.align_to::<u32>() };
+
+            for (i, reg) in T::regs().oobtxbuf_iter().skip(1).take(aligned.len()).enumerate() {
+                reg.write(|w| unsafe { w.bits(aligned[i]) });
+            }
+
+            let mut remaining = 0_u32;
+
+            for byte in suffix {
+                remaining |= u32::from(*byte);
+                remaining <<= 8;
+            }
+
+            T::regs()
+                .oobtxbuf(aligned.len() + 1)
+                .write(|w| unsafe { w.bits(remaining) });
+
+            // REVISIT: add a struct for the header.
+            let pktlen = buf.len() as u32 + 3;
+            let cycle = u32::from(Cycle::OOB.into_byte());
+            let tag = 0;
+            let header = pktlen | cycle << 8 | tag << 16 | (buf.len() as u32) << 24;
+            T::regs().oobtxbuf(0).write(|w| unsafe { w.bits(header) });
+
+            critical_section::with(|_| T::regs().oobctl().modify(|_, w| w.oob_avail().set_bit()));
+
+            Ok(buf.len())
+        }
+    }
+}
+
 /// The interrupt handler for the [Espi] controller.
 pub struct InterruptHandler<T> {
     _phantom: PhantomData<T>,
@@ -743,101 +1045,17 @@ impl<T: Instance> crate::interrupt::typelevel::Handler<T::Interrupt> for Interru
     unsafe fn on_interrupt() {
         if T::regs().espists().read().bits() != 0 {
             // Disable all interrupts
-            T::regs().espiie().write(|w| {
-                w.bmwburstdoneie()
-                    .clear_bit()
-                    .bmwbursterrie()
-                    .clear_bit()
-                    .flautorddisie()
-                    .clear_bit()
-                    .flautordqempie()
-                    .clear_bit()
-                    .flautordpndie()
-                    .clear_bit()
-                    .flautordstrie()
-                    .clear_bit()
-                    .flprterrie()
-                    .clear_bit()
-                    .bmburstdoneie()
-                    .clear_bit()
-                    .bmbursterrie()
-                    .clear_bit()
-                    .pmsgrxie()
-                    .clear_bit()
-                    .pbmrxie()
-                    .clear_bit()
-                    .bmtxdoneie()
-                    .clear_bit()
-                    .flnprqsie()
-                    .clear_bit()
-                    .amdoneie()
-                    .clear_bit()
-                    .amerrie()
-                    .clear_bit()
-                    .pltrstie()
-                    .clear_bit()
-                    .espirstie()
-                    .clear_bit()
-                    .vwupdie()
-                    .clear_bit()
-                    .dfrdie()
-                    .clear_bit()
-                    .peraccie()
-                    .clear_bit()
-                    .flnacsie()
-                    .clear_bit()
-                    .flashrxie()
-                    .clear_bit()
-                    .oobrxie()
-                    .clear_bit()
-                    .berrie()
-                    .clear_bit()
-                    .cfgupdie()
-                    .clear_bit()
-                    .ibrstie()
-                    .clear_bit()
-            });
+            //
+            // # Safety: There is an assumption that the PAC properly
+            // marks W1C bits. As long as that invariant is held, the
+            // following is safe.
+            T::regs()
+                .espiie()
+                .write(|w| unsafe { w.bits(EspiieSpec::ONE_TO_MODIFY_FIELDS_BITMAP) });
 
             // Wake the waker
             T::waker().wake()
         }
-    }
-}
-
-use embassy_espi_driver as driver;
-
-impl<'p, T: Instance> driver::Driver<'p> for Espi<'p, T> {
-    type Target = Target<'p, T>;
-
-    fn start(self) -> Self::Target {
-        // initialize the HW here.
-
-        Target { phantom: PhantomData }
-    }
-}
-
-/// Type representing the NPCX eSPI Target.
-pub struct Target<'p, T: Instance> {
-    phantom: PhantomData<&'p mut T>,
-}
-
-impl<'p, T: Instance> driver::Target for Target<'p, T> {
-    async fn enable(&mut self) {}
-    async fn disable(&mut self) {}
-
-    async fn poll(&mut self) -> driver::Event {
-        // move `listen()` here
-        todo!()
-    }
-
-    async fn alert(&mut self) {}
-
-    fn enable_channel(
-        &mut self,
-        channel: driver::ChannelType,
-        config: driver::ChannelConfig,
-    ) -> Result<(), driver::EspiError> {
-        Ok(())
     }
 }
 
