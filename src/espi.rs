@@ -214,49 +214,74 @@ pub struct Config {
 /// Peripheral channel configuration.
 #[derive(Clone, Copy)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct PeripheralConfig {}
+pub struct PeripheralConfig {
+    /// Maximum channel payload size.
+    pub max_payload_size: PayloadSize,
+    /// Maximum read request size.
+    pub max_request_size: RequestSize,
+}
 
 /// OOB channel configuration.
 #[derive(Clone, Copy)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct OobConfig {
     /// Maximum OOB payload size.
-    pub max_payload_size: OobPayload,
+    pub max_payload_size: PayloadSize,
 }
 
-/// OOB payload size
+/// Channel payload size
 #[derive(Clone, Copy)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub enum OobPayload {
-    /// 64 bytes,
+pub enum PayloadSize {
+    /// 64 bytes.
     _64,
-    /// 128 bytes,
+    /// 128 bytes.
     _128,
-    /// 256 bytes,
+    /// 256 bytes.
     _256,
 }
 
-impl TryFrom<u8> for OobPayload {
+impl TryFrom<u8> for PayloadSize {
     type Error = Error;
 
-    fn try_from(value: u8) -> Result<OobPayload, Error> {
+    fn try_from(value: u8) -> Result<PayloadSize, Error> {
         match value {
-            0 => Ok(OobPayload::_64),
-            1 => Ok(OobPayload::_128),
-            3 => Ok(OobPayload::_256),
+            0 => Ok(PayloadSize::_64),
+            1 => Ok(PayloadSize::_128),
+            3 => Ok(PayloadSize::_256),
             _ => Err(Error::Other),
         }
     }
 }
 
-impl From<OobPayload> for u8 {
-    fn from(value: OobPayload) -> u8 {
+impl From<PayloadSize> for u8 {
+    fn from(value: PayloadSize) -> u8 {
         match value {
-            OobPayload::_64 => 0,
-            OobPayload::_128 => 1,
-            OobPayload::_256 => 3,
+            PayloadSize::_64 => 0,
+            PayloadSize::_128 => 1,
+            PayloadSize::_256 => 3,
         }
     }
+}
+
+/// Channel read request size.
+#[derive(Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum RequestSize {
+    /// 64 bytes.
+    _64,
+    /// 128 bytes.
+    _128,
+    /// 256 bytes.
+    _256,
+    /// 512 bytes.
+    _512,
+    /// 1024 bytes.
+    _1024,
+    /// 2048 bytes.
+    _2048,
+    /// 4096 bytes.
+    _4096,
 }
 
 /// VWire channel configuration.
@@ -436,7 +461,7 @@ impl<'p, T: Instance> Espi<'p, T> {
                     config
                         .oob_config
                         .unwrap_or(OobConfig {
-                            max_payload_size: OobPayload::_64,
+                            max_payload_size: PayloadSize::_64,
                         })
                         .max_payload_size
                         .into(),
@@ -557,6 +582,8 @@ impl<'p, T: Instance> Driver<'p> for Espi<'p, T> {
                 });
 
                 if status.ibrst().bit_is_set() {
+                    defmt::debug!("IBRST");
+
                     me.pltrst_received = false;
                     Poll::Ready(Ok(embassy_espi_driver::Event::Reset))
                 } else if status.cfgupd().bit_is_set() {
@@ -581,32 +608,58 @@ impl<'p, T: Instance> Driver<'p> for Espi<'p, T> {
                     }
 
                     Poll::Pending
+                } else if status.pltrst().bit_is_set() {
+                    defmt::debug!("PLTRST");
+
+                    me.pltrst_received = true;
+
+                    let index3 = T::regs().vwevms(1).read().bits();
+                    let pltrst = index3 & (1 << 1) == 0;
+                    let pltrst_valid = index3 & (1 << 5) != 0;
+
+                    defmt::debug!("PLTRST: {} {}", pltrst, pltrst_valid);
+
+                    Poll::Pending
                 } else if status.vwupd().bit_is_set() {
+                    defmt::debug!("VWUPD");
+
                     let supported = T::regs().espicfg().read().pcchn_supp().bit();
                     let index3 = T::regs().vwevms(1).read().bits();
                     let pltrst = index3 & (1 << 1) == 0;
                     let pltrst_valid = index3 & (1 << 5) != 0;
 
+                    defmt::debug!("VWUPD: {} {} recv {}", pltrst, pltrst_valid, me.pltrst_received);
+
                     // Peripheral channel is somewhat quirky. We can only enable
                     // it after PLTRST# asserted.
                     if me.pltrst_received && pltrst && pltrst_valid && supported {
                         me.enable_peripheral_channel();
-                    } else {
-                        me.disable_peripheral_channel();
                     }
 
                     Poll::Ready(Ok(embassy_espi_driver::Event::VWire))
                 } else if status.espirst().bit_is_set() {
+                    defmt::debug!("ESPIRST");
+
                     me.pltrst_received = false;
+                    me.disable_peripheral_channel();
                     Poll::Ready(Ok(embassy_espi_driver::Event::Reset))
                 } else if status.oobrx().bit_is_set() {
+                    defmt::debug!("OOBRX");
+
                     Poll::Ready(Ok(embassy_espi_driver::Event::Oob))
+                } else if status.pmsgrx().bit_is_set() {
+                    defmt::debug!("PERMSG Received");
+
+                    for r in T::regs().psmrxbuf_iter() {
+                        defmt::debug!("{:08x}", r.read().bits());
+                    }
+
+                    Poll::Ready(Ok(embassy_espi_driver::Event::Peripheral))
                 } else {
                     Poll::Pending
                 }
             },
             |_| {
-                // Enable all interrupts
                 T::regs().espiie().write(|w| {
                     w.pltrstie()
                         .set_bit()
@@ -627,6 +680,8 @@ impl<'p, T: Instance> Driver<'p> for Espi<'p, T> {
                         .cfgupdie()
                         .set_bit()
                         .ibrstie()
+                        .set_bit()
+                        .pmsgrxie()
                         .set_bit()
                 });
             },
@@ -695,9 +750,9 @@ impl<'p, T: Instance> oob::OobChannel for Espi<'p, T> {
         let size = (header & 0xff00_0000) >> 24 | (header & 0x000f_0000) >> 8;
 
         let max_payload_size = match T::regs().oobctl().read().oobplsize().bits().try_into().unwrap() {
-            OobPayload::_64 => 64,
-            OobPayload::_128 => 128,
-            OobPayload::_256 => 256,
+            PayloadSize::_64 => 64,
+            PayloadSize::_128 => 128,
+            PayloadSize::_256 => 256,
         };
 
         if buf.len() < size as usize || buf.len() > max_payload_size {
@@ -727,9 +782,9 @@ impl<'p, T: Instance> oob::OobChannel for Espi<'p, T> {
 
     async fn oob_send(&mut self, buf: &[u8]) -> Result<usize, embassy_espi_driver::EspiError> {
         let max_payload_size = match T::regs().oobctl().read().oobplsize().bits().try_into().unwrap() {
-            OobPayload::_64 => 64,
-            OobPayload::_128 => 128,
-            OobPayload::_256 => 256,
+            PayloadSize::_64 => 64,
+            PayloadSize::_128 => 128,
+            PayloadSize::_256 => 256,
         };
 
         if T::regs().oobctl().read().oob_avail().bit_is_set() {

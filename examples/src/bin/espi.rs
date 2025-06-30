@@ -8,7 +8,10 @@ use embassy_espi::driver::{
     vwire::{self, VWireChannel},
 };
 use embassy_executor::Spawner;
-use embassy_npcx::espi::{AlertMode, Config, Espi, InterruptHandler, IoMode, OobConfig, OobPayload, VWireConfig};
+use embassy_npcx::espi::{
+    AlertMode, Config, Espi, InterruptHandler, IoMode, OobConfig, PayloadSize, PeripheralConfig, RequestSize,
+    VWireConfig,
+};
 use embassy_npcx::{bind_interrupts, peripherals};
 use {defmt_rtt as _, panic_probe as _};
 
@@ -44,9 +47,13 @@ async fn main(_spawner: Spawner) {
 
     let mut config = Config::default();
 
+    config.peripheral_config = Some(PeripheralConfig {
+        max_payload_size: PayloadSize::_256,
+        max_request_size: RequestSize::_2048,
+    });
     config.vwire_config = Some(VWireConfig {});
     config.oob_config = Some(OobConfig {
-        max_payload_size: OobPayload::_64,
+        max_payload_size: PayloadSize::_64,
     });
     config.alert_mode = AlertMode::Pin;
     config.io_mode = IoMode::Quad;
@@ -72,17 +79,17 @@ async fn main(_spawner: Spawner) {
                         // VWires changed, for now let's just get and
                         // print all Readable types:
 
-                        info!("SLP_S3# {:?}", espi.read_vwire(vwire::SlpS3).unwrap());
-                        info!("SLP_S4# {:?}", espi.read_vwire(vwire::SlpS4).unwrap());
-                        info!("SLP_S5# {:?}", espi.read_vwire(vwire::SlpS5).unwrap());
+                        // info!("SLP_S3# {:?}", espi.read_vwire(vwire::SlpS3).unwrap());
+                        // info!("SLP_S4# {:?}", espi.read_vwire(vwire::SlpS4).unwrap());
+                        // info!("SLP_S5# {:?}", espi.read_vwire(vwire::SlpS5).unwrap());
 
-                        info!("SUS_STAT# {:?}", espi.read_vwire(vwire::SusStat).unwrap());
-                        info!("PLTRST# {:?}", espi.read_vwire(vwire::PltRst).unwrap());
-                        info!("OOB_RST_WARN# {:?}", espi.read_vwire(vwire::OobRstWarn).unwrap());
+                        // info!("SUS_STAT# {:?}", espi.read_vwire(vwire::SusStat).unwrap());
+                        // info!("PLTRST# {:?}", espi.read_vwire(vwire::PltRst).unwrap());
+                        // info!("OOB_RST_WARN# {:?}", espi.read_vwire(vwire::OobRstWarn).unwrap());
 
-                        info!("HOST_RST_WARN# {:?}", espi.read_vwire(vwire::HostRstWarn).unwrap());
-                        info!("SMIOUT# {:?}", espi.read_vwire(vwire::SmiOut).unwrap());
-                        info!("NMIOUT# {:?}", espi.read_vwire(vwire::NmiOut).unwrap());
+                        // info!("HOST_RST_WARN# {:?}", espi.read_vwire(vwire::HostRstWarn).unwrap());
+                        // info!("SMIOUT# {:?}", espi.read_vwire(vwire::SmiOut).unwrap());
+                        // info!("NMIOUT# {:?}", espi.read_vwire(vwire::NmiOut).unwrap());
                     }
                     Event::Oob => {
                         info!("OOB Received!");
