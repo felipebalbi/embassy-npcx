@@ -2,11 +2,7 @@
 #![no_std]
 
 use defmt::*;
-use embassy_espi::driver::{
-    Driver, Event,
-    oob::OobChannel,
-    vwire::{self, VWireChannel},
-};
+use embassy_espi::driver::{Driver, Event, oob::OobChannel, vwire::VWireChannel};
 use embassy_executor::Spawner;
 use embassy_npcx::espi::{
     AlertMode, Config, Espi, InterruptHandler, IoMode, OobConfig, PayloadSize, PeripheralConfig, RequestSize,
@@ -79,18 +75,21 @@ async fn main(_spawner: Spawner) {
                         // VWires changed, for now let's just get and
                         // print all Readable types:
 
-                        // info!("SLP_S3# {:?}", espi.read_vwire(vwire::SlpS3).unwrap());
-                        // info!("SLP_S4# {:?}", espi.read_vwire(vwire::SlpS4).unwrap());
-                        // info!("SLP_S5# {:?}", espi.read_vwire(vwire::SlpS5).unwrap());
+                        // for i in 2..255 {
+                        //     // skip reserved range and platform specific range
+                        //     if i >= 8 && i <= 127 {
+                        //         continue;
+                        //     }
 
-                        // info!("SUS_STAT# {:?}", espi.read_vwire(vwire::SusStat).unwrap());
-                        // info!("PLTRST# {:?}", espi.read_vwire(vwire::PltRst).unwrap());
-                        // info!("OOB_RST_WARN# {:?}", espi.read_vwire(vwire::OobRstWarn).unwrap());
-
-                        // info!("HOST_RST_WARN# {:?}", espi.read_vwire(vwire::HostRstWarn).unwrap());
-                        // info!("SMIOUT# {:?}", espi.read_vwire(vwire::SmiOut).unwrap());
-                        // info!("NMIOUT# {:?}", espi.read_vwire(vwire::NmiOut).unwrap());
+                        let result = espi.put_vwire(2);
+                        info!("VWIRE {:?}", result);
+                        let result = espi.put_vwire(3);
+                        info!("VWIRE {:?}", result);
+                        let result = espi.put_vwire(7);
+                        info!("VWIRE {:?}", result);
+                        // }
                     }
+
                     Event::Oob => {
                         info!("OOB Received!");
                         let mut buf = [0; 256];
@@ -101,6 +100,7 @@ async fn main(_spawner: Spawner) {
                             error!("Failed receiving OOB");
                         }
                     }
+
                     _ => {}
                 }
             }

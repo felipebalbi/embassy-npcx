@@ -691,52 +691,99 @@ impl<'p, T: Instance> Driver<'p> for Espi<'p, T> {
 }
 
 impl<'p, T: Instance> vwire::VWireChannel for Espi<'p, T> {
-    fn read_vwire<VWIRE: vwire::Readable>(
-        &mut self,
-        vwire: VWIRE,
-    ) -> Result<(bool, bool), embassy_espi_driver::EspiError> {
-        let index = match vwire.index() {
-            2 => 0,
-            3 => 1,
-            7 => 2,
-            _ => return Err(embassy_espi_driver::EspiError::UnsupportedVWire),
-        };
+    fn get_vwire(&mut self, vwire: vwire::VWire) -> Result<(), embassy_espi_driver::EspiError> {
+        match vwire {
+            vwire::VWire::Interrupt(index, irq) => {
+                let reg = T::regs().vwswirq();
 
-        let bit = T::regs().vwevms(index).read().wire3_0().bits() & (1 << vwire.bit()) != 0;
-        let valid = T::regs().vwevms(index).read().wire3_0valid().bits() & (1 << vwire.bit()) != 0;
+                // REVISIT: add custom error
+                if reg.read().index_en().bit_is_clear() {
+                    return Err(embassy_espi_driver::EspiError::UnsupportedVWire);
+                }
 
-        Ok((bit, valid))
-    }
+                // REVISIT: add custom error
+                if index > 1 {
+                    return Err(embassy_espi_driver::EspiError::UnsupportedVWire);
+                }
 
-    fn write_vwire<VWIRE: vwire::Writeable>(
-        &mut self,
-        vwire: VWIRE,
-        value: bool,
-    ) -> Result<(), embassy_espi_driver::EspiError> {
-        let bit = vwire.bit();
-        let index = match vwire.index() {
-            4 => 0,
-            5 => 1,
-            6 => 2,
-            _ => return Err(embassy_espi_driver::EspiError::UnsupportedVWire),
-        };
+                critical_section::with(|_| {
+                    reg.modify(|_, w| {
+                        unsafe { w.index().bits(index).irq_num().bits(irq.line()) }
+                            .irq_lvl()
+                            .variant(irq.level().into())
+                    })
+                });
 
-        T::regs().vwevsm(index).modify(|r, w| {
-            let mut wires = r.wire3_0().bits();
-            let mut valid = r.wire3_0valid().bits();
-
-            if value {
-                wires |= 1 << bit;
-            } else {
-                wires &= !(1 << bit);
+                Ok(())
             }
 
-            valid |= 1 << bit;
+            vwire::VWire::System(index, system) => {
+                let index = match index {
+                    4..=6 => usize::from(index - 2),
+                    _ => return Err(embassy_espi_driver::EspiError::UnsupportedVWire),
+                };
 
-            unsafe { w.wire3_0().bits(wires).wire3_0valid().bits(valid) }
-        });
+                // REVISIT: add custom error
+                if T::regs().vwevsm(index).read().index_en().bit_is_clear() {
+                    return Err(embassy_espi_driver::EspiError::UnsupportedVWire);
+                }
 
-        Ok(())
+                let data = system.into_bits();
+                T::regs()
+                    .vwevsm(index.into())
+                    .write(|w| unsafe { w.wire3_0().bits(data & 0x0f).wire3_0valid().bits(data >> 4) });
+
+                Ok(())
+            }
+
+            vwire::VWire::Gpio(index, gpio) => {
+                // REVISIT: add custom error
+                if index < 128 {
+                    return Err(embassy_espi_driver::EspiError::UnsupportedVWire);
+                }
+
+                let index = usize::from(index - 128);
+                let reg = T::regs().vwgpsm(index);
+
+                // REVISIT: add custom error
+                if reg.read().index_en().bit_is_clear() {
+                    return Err(embassy_espi_driver::EspiError::UnsupportedVWire);
+                }
+
+                let byte = gpio.into_bits();
+                let gpios = byte & 0x0f;
+                let valid = byte >> 4;
+
+                critical_section::with(|_| {
+                    reg.modify(|_, w| unsafe { w.wire3_0().bits(gpios).wire3_0valid().bits(valid) })
+                });
+
+                Ok(())
+            }
+
+            _ => Err(embassy_espi_driver::EspiError::UnsupportedVWire),
+        }
+    }
+
+    fn put_vwire(&mut self, index: u8) -> Result<vwire::VWire, embassy_espi_driver::EspiError> {
+        match index {
+            2 | 3 | 7 => {
+                let i = if index == 7 { 2 } else { index - 2 };
+                let data = (T::regs().vwevms(usize::from(i)).read().bits() & 0xff) as u8;
+                let system = vwire::System::from_bits(data);
+
+                Ok(vwire::VWire::System(index, system))
+            }
+
+            128..=255 => {
+                let i = index - 128;
+                let data = (T::regs().vwgpms(usize::from(i)).read().bits() & 0xff) as u8;
+                let gpio = vwire::Gpio::from_bits(data);
+
+                Ok(vwire::VWire::Gpio(index, gpio))
+            }
+            _ => return Err(embassy_espi_driver::EspiError::UnsupportedVWire),
+        }
     }
 }
 
